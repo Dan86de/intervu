@@ -22,6 +22,14 @@ _Avoid_: toolbar, shell, frame, wrapper
 A marker the human attaches to a clicked element or a selected run of text in the artifact, carrying a stable CSS selector and the surrounding context for that target.
 _Avoid_: comment, marker, note, pin
 
+**Bridge**:
+The only path across the artifact iframe's opaque-origin boundary (ADR 0003): a namespaced `postMessage` exchange between the iframe and the chrome. Messages are validated by frame reference, not origin, and flow both ways - the human's annotations travel up (iframe to chrome), annotation removals and mode changes travel down (chrome to iframe).
+_Avoid_: connection, link; the server-to-browser **SSE stream** (#7) is a separate path, not the Bridge.
+
+**Annotate-mode**:
+A toggle state of the chrome. On: clicks and text selections in the artifact are captured as annotations (crosshair cursor, hover preview) instead of driving the artifact. Off: the artifact behaves natively and nothing is intercepted. The human turns it on to point at targets, off to use the prototype - the chosen answer to "annotate any element" vs "keep native controls working", since a script cannot detect an artifact's own click handlers.
+_Avoid_: edit-mode, select-mode, inspect-mode
+
 ### The loop
 
 **Feedback**:
@@ -53,6 +61,8 @@ _Avoid_: MCP (intervu is a CLI, not an MCP server)
 ## Relationships
 
 - A **Session** wraps one **artifact**, shown inside the **chrome**.
+- The **artifact** iframe and the **chrome** communicate only through the **Bridge**; the human's **annotations** cross it from iframe to chrome, and removals cross back.
+- The human captures **annotations** only while the **chrome** is in **Annotate-mode**; turning it off returns the **artifact** to native behavior.
 - The human attaches **annotations** to the **artifact** and sends them with a message as one **feedback**; the agent drains queued feedback via **poll** and answers with an **agent-reply**.
 - **Presence** reflects the agent's state across the **poll** lifecycle of a **Session**.
 - Every CLI command renders its result as **TOON** (a string passes through raw; an object is `encode`d); **AXI** is the design discipline, **TOON** the output format it mandates.
