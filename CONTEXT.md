@@ -11,7 +11,7 @@ The agent-generated HTML file - plus any sibling assets it references by relativ
 _Avoid_: file, document, page
 
 **Session**:
-The review context for one artifact - its queue of pending feedback, its conversation (feedback and agent-replies), and a status (`open` -> ... -> `ended`) - identified by a key derived from the artifact's normalized absolute path (`hash(realpath)`), stable across the agent's edits so that re-running `open` on the same path resumes the same Session.
+The review context for one artifact - its queue of pending feedback, its conversation (feedback and agent-replies), and a reversible status (`open` -> `ended` via an **End**, then back to `open` if the path is re-opened) - identified by a key derived from the artifact's normalized absolute path (`hash(realpath)`), stable across the agent's edits so that re-running `open` on the same path resumes the same Session. Because the key is path-based there is exactly one Session per path, so `end` is reversible (a re-open resurrects an `ended` Session to `open`), not destructive.
 _Avoid_: tab, window, connection
 
 **Chrome**:
@@ -41,8 +41,12 @@ The serialized live DOM of the artifact (`document.documentElement.outerHTML`) c
 _Avoid_: source, file contents (the on-disk bytes served at `/s/:key/source` are a separate thing)
 
 **Poll**:
-The agent's long-poll command (`intervu poll <file>`) that blocks silently until the human acts, then returns queued feedback as TOON; safe to kill and re-run with no loss.
+The agent's long-poll command (`intervu poll <file>`) that blocks silently until the human acts, then returns queued feedback as TOON. A Poll settles for one of three reasons - feedback was queued, a bounded `--timeout` expired (`timedOut`), or the Session ended (`ended`, which may carry a final feedback in the same return when the human used **Send & end**). A Poll that starts on an already-`ended` Session returns `ended` immediately rather than blocking. Safe to kill and re-run with no loss.
 _Avoid_: wait, watch, listen
+
+**End**:
+The transition of a Session to `ended` status, driven by the human from the chrome - a top-bar **End session** control (ends now, no message), or **Send & end** which posts a final **Feedback** and ends in one atomic step - or by the agent from the terminal with `intervu end <file>` (no final-feedback rider). The chrome uses `POST /s/:key/end` (key-addressed, optional feedback rider) and the CLI uses `POST /end` (path-addressed, lookup-without-create), both over one core: the handler applies the optional final feedback and the status flip to the store before signalling, so a waiting Poll drains the final feedback and observes `ended` in the same settle. Persisted; idempotent (ending an `ended` Session is a no-op). Reversible: re-opening the path resurrects the Session to `open`.
+_Avoid_: close, cancel, finish; **stop** (which shuts the whole daemon down, not one Session)
 
 **Agent-reply**:
 A message the agent posts into the human's conversation panel (via `poll --agent-reply "<msg>"`) to explain what it changed; the agent-to-human direction of the conversation.
@@ -76,6 +80,7 @@ _Avoid_: MCP (intervu is a CLI, not an MCP server)
 - The **artifact** iframe and the **chrome** communicate only through the **Bridge**; the human's **annotations** cross it from iframe to chrome, and removals cross back.
 - The human captures **annotations** only while the **chrome** is in **Annotate-mode**; turning it off returns the **artifact** to native behavior.
 - The human attaches **annotations** to the **artifact** and sends them with a message as one **feedback**; the agent drains queued feedback via **poll** and answers with an **agent-reply**.
+- The human **End**s a **Session** from the chrome - the top-bar End control (ends now), or **Send & end** (posts a final **Feedback** and ends atomically); the agent's current or next **Poll** observes the `ended` status and stops. Re-opening the path resurrects the Session.
 - **Presence** reflects the agent's state across the **poll** lifecycle of a **Session**.
 - Every CLI command renders its result as **TOON** (a string passes through raw; an object is `encode`d); **AXI** is the design discipline, **TOON** the output format it mandates.
 - The loop's three transports are distinct paths: the **Bridge** carries iframe<->chrome, the **poll** carries server->agent (feedback out), and the **SSE stream** carries server->browser (reload, **Conversation** appends, **Presence**).
@@ -92,3 +97,4 @@ _Avoid_: MCP (intervu is a CLI, not an MCP server)
 - **Presence** had two conflicting state triples: story #10 said listening/working/idle, `SessionHub` said listening/working/waiting. Resolved: the canonical states are **idle / listening / working** (human-facing); "waiting" is retired as the agent's-eye view of **listening**.
 - **Session** key was described as "content-addressed", but the agent live-edits the artifact, so a content-derived key would break mid-review. Resolved: the key is **path-based** - `hash(realpath(artifact))` - stable across edits; identical content at two paths is two Sessions; renaming an artifact mid-review is not a supported flow.
 - **TOON** is defined as the format for "all CLI output", but the **SSE stream** (#7) is browser-facing, consumed by `EventSource`/JS. Resolved: TOON is the **CLI stdout** format only; the SSE channel carries **JSON** frames. "All output is TOON" scopes to the CLI, not the browser wire.
+- `ended` is a **Session** status, not a **Presence** value. Presence stays the three agent-states (idle / listening / working); when a Session ends, the chrome stops showing Presence and renders an "Ended" pill in the same top-bar region. Resolved: do not add `ended` as a fourth Presence - ended is Session lifecycle, Presence is agent activity. They are pushed as distinct **SSE stream** frames (`PresenceChanged` vs `SessionEnded`).
