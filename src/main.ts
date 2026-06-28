@@ -1,12 +1,13 @@
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun";
-import { Console, Effect, FileSystem, Layer } from "effect";
+import { Cause, Console, Effect, FileSystem, Layer, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import { AppConfig, version } from "./AppConfig.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
-import { ArtifactNotFound, DaemonNotRunning } from "./Errors.ts";
+import * as ErrorReport from "./ErrorReport.ts";
+import { ArtifactNotFound } from "./Errors.ts";
 import * as Output from "./Output.ts";
 import * as Server from "./Server.ts";
 import { ServerLifecycle } from "./ServerLifecycle.ts";
@@ -18,23 +19,41 @@ import * as Toon from "./Toon.ts";
 const bin = "intervu";
 const description =
   "Local AXI-style CLI for collaborative review of agent-generated HTML artifacts.";
-const help = "run 'intervu <artifact.html>' to open a review session";
 
 /**
  * The single emit boundary: every byte intervu writes to stdout passes through
- * here. It is success-only for now; slice #9 hooks structured-error formatting
- * onto this seam.
+ * here. Success output and the structured-error envelope (ADR 0014) both land
+ * here, so stdout has exactly one writer.
  */
 const emit = (text: string): Effect.Effect<void> => Console.log(text);
 
 /**
- * Bare `intervu`: the content-first home view. `SessionStore` lives in the
- * daemon, so listing live Sessions over HTTP is held for a later slice; this
- * keeps the static empty-sessions stub from #2.
+ * Bare `intervu`: the content-first home view (ADR 0013). Reads the `open`
+ * Sessions straight from the persisted state file - no daemon, zero network
+ * calls - and prints each as `{key, path, status}`. `ended` Sessions are
+ * history and omitted; an empty list prints an explicit empty-state help line,
+ * distinct from any error.
  */
 const root = Command.make(bin, {}, () =>
   Effect.gen(function* () {
-    const view = Output.home({ bin, description, sessions: [], help });
+    const persistence = yield* SessionPersistence;
+    const live = (yield* persistence.load).filter(
+      (session) => session.status === "open",
+    );
+
+    const view = Output.home({
+      bin,
+      description,
+      sessions: live.map((session) => ({
+        key: session.key,
+        path: session.path,
+        status: session.status,
+      })),
+      help:
+        live.length === 0
+          ? "no active reviews - run 'intervu <file>' to open one"
+          : "run 'intervu poll <file>' to receive feedback, or 'intervu <file>' to open another",
+    });
     yield* emit(yield* Toon.encode(view));
   }),
 );
@@ -188,28 +207,49 @@ const server = Command.make("server", {}, () =>
 
 /**
  * `intervu stop`: read the pidfile and SIGTERM the daemon, which releases the
- * server gracefully.
+ * server gracefully. Idempotent (ADR 0014): with no daemon to signal - the
+ * pidfile is absent, holds a non-numeric pid, or names a process that is already
+ * gone - it is a benign no-op (`stopped: false`, exit 0), so a repeat stop never
+ * fails. A genuine read error (e.g. an unreadable pidfile) still propagates.
  */
 const stop = Command.make("stop", {}, () =>
   Effect.gen(function* () {
     const config = yield* AppConfig;
     const fs = yield* FileSystem.FileSystem;
 
-    const pidText = yield* fs
-      .readFileString(config.pidFile)
-      .pipe(Effect.mapError(() => new DaemonNotRunning()));
-    const pid = Number.parseInt(pidText.trim(), 10);
-    if (Number.isNaN(pid)) {
-      return yield* new DaemonNotRunning();
+    const nothingToStop = {
+      stopped: false,
+      help: "nothing to stop - no daemon is running",
+    } as const;
+
+    const exists = yield* fs.exists(config.pidFile);
+    if (!exists) {
+      yield* emit(yield* Toon.encode(nothingToStop));
+      return;
     }
 
-    yield* Effect.try({
-      try: () => process.kill(pid, "SIGTERM"),
-      catch: () => new DaemonNotRunning(),
-    });
+    const pidText = yield* fs.readFileString(config.pidFile);
+    const pid = Number.parseInt(pidText.trim(), 10);
+    if (Number.isNaN(pid)) {
+      yield* emit(yield* Toon.encode(nothingToStop));
+      return;
+    }
+
+    // `process.kill` throws when the process is already gone; treat that as the
+    // benign no-op rather than an error - the daemon we would stop is not there.
+    const signalled = yield* Effect.try(() =>
+      process.kill(pid, "SIGTERM"),
+    ).pipe(Effect.orElseSucceed(() => false));
 
     yield* emit(
-      yield* Toon.encode({ stopped: pid, help: "daemon received SIGTERM" }),
+      yield* Toon.encode(
+        signalled
+          ? {
+              stopped: pid,
+              help: "daemon received SIGTERM - it will exit shortly",
+            }
+          : nothingToStop,
+      ),
     );
   }),
 );
@@ -247,8 +287,31 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(PlatformLayer),
 );
 
+/**
+ * The structured error contract (ADR 0014), wired onto the `emit` seam:
+ *
+ * - `tapError` classifies every typed failure that reaches here and prints the
+ *   TOON envelope on stdout (or no-ops on framework `CliError`, already
+ *   rendered). It preserves the original failure, so the run still exits 1.
+ * - `tapDefect` leaves bugs (`die`) raw and loud on stderr via the pretty cause;
+ *   they are never masked as a clean structured error.
+ *
+ * `disableErrorReporting: true` suppresses only the runtime's automatic failure
+ * log, so neither tier is double-printed; `defaultTeardown` still computes the
+ * exit code (1 on failure, 0 on success).
+ */
 const program = Command.runWith(cli, { version })(args).pipe(
+  Effect.tapError((error) =>
+    Effect.gen(function* () {
+      const config = yield* AppConfig;
+      const view = ErrorReport.report(error, { logFile: config.logFile });
+      if (Option.isSome(view)) {
+        yield* emit(yield* Toon.encode(view.value));
+      }
+    }),
+  ),
+  Effect.tapDefect((defect) => Console.error(Cause.pretty(Cause.die(defect)))),
   Effect.provide(AppLayer),
 );
 
-BunRuntime.runMain(program);
+BunRuntime.runMain(program, { disableErrorReporting: true });

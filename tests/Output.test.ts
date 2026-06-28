@@ -24,6 +24,19 @@ describe("Output.home", () => {
       help: "do the thing",
     });
   });
+
+  it("pins each session row to {key, path, status} order", () => {
+    const view = Output.home({
+      bin: "intervu",
+      description: "desc",
+      sessions: [{ status: "open", path: "/tmp/a.html", key: "abc" }],
+      help: "next",
+    });
+
+    const row = view.sessions[0];
+    expect(Object.keys(row ?? {})).toEqual(["key", "path", "status"]);
+    expect(row).toEqual({ key: "abc", path: "/tmp/a.html", status: "open" });
+  });
 });
 
 describe("Output.session", () => {

@@ -11,11 +11,13 @@ import type { Annotation, Feedback } from "./Protocol.ts";
  */
 
 /**
- * A session as it appears in the home view. The walking skeleton always renders
- * an empty list; `SessionStore` (slice #3) is what first populates it.
+ * A live Session as it appears in the home view, in canonical key order: `key`,
+ * `path`, `status`. `path` is the handle every command takes, so the home view
+ * carries it for the agent to `poll` (ADR 0013).
  */
 export interface SessionSummary {
   readonly key: string;
+  readonly path: string;
   readonly status: string;
 }
 
@@ -32,12 +34,17 @@ export interface HomeView {
 
 /**
  * Shape the home view, pinning key order so the TOON render is stable
- * regardless of how the caller ordered its fields.
+ * regardless of how the caller ordered its fields - including each session row's
+ * `{key, path, status}` order.
  */
 export const home = (params: HomeView): HomeView => ({
   bin: params.bin,
   description: params.description,
-  sessions: params.sessions,
+  sessions: params.sessions.map((session) => ({
+    key: session.key,
+    path: session.path,
+    status: session.status,
+  })),
   help: params.help,
 });
 
