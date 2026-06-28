@@ -48,9 +48,17 @@ _Avoid_: wait, watch, listen
 A message the agent posts into the human's conversation panel (via `poll --agent-reply "<msg>"`) to explain what it changed; the agent-to-human direction of the conversation.
 _Avoid_: response, answer
 
+**Conversation**:
+The daemon-owned, in-memory ordered thread of the human's Feedback messages and the agent's Agent-replies for one Session - the single source of truth (#7), replayed to the chrome on SSE-stream connect and then appended live; the chrome renders the conversation panel purely from this, never from optimistic local state.
+_Avoid_: thread, transcript, history, chat
+
 **Presence**:
 A human-facing indicator of the agent's state in the review loop: `idle` (no agent poll is open), `listening` (an agent poll is open and ready to receive feedback now), or `working` (the agent has taken feedback and is not currently polling).
 _Avoid_: status, online/offline, waiting
+
+**SSE stream**:
+The single server-to-browser push channel (#7): a `text/event-stream` response off `SessionHub` at `/s/:key/events`, carrying JSON frames for the three server-driven pushes - live-reload nudges, Conversation appends (the human's Feedback messages and the agent's Agent-replies), and Presence changes. Replays the Conversation log on connect via `Last-Event-ID`. A separate path from both the Bridge (iframe<->chrome) and the poll (server-to-agent).
+_Avoid_: connection, socket, websocket; the **Bridge** (a different path); TOON (this wire is JSON, not TOON)
 
 ### Output and design
 
@@ -70,6 +78,7 @@ _Avoid_: MCP (intervu is a CLI, not an MCP server)
 - The human attaches **annotations** to the **artifact** and sends them with a message as one **feedback**; the agent drains queued feedback via **poll** and answers with an **agent-reply**.
 - **Presence** reflects the agent's state across the **poll** lifecycle of a **Session**.
 - Every CLI command renders its result as **TOON** (a string passes through raw; an object is `encode`d); **AXI** is the design discipline, **TOON** the output format it mandates.
+- The loop's three transports are distinct paths: the **Bridge** carries iframe<->chrome, the **poll** carries server->agent (feedback out), and the **SSE stream** carries server->browser (reload, **Conversation** appends, **Presence**).
 
 ## Example dialogue
 
@@ -82,3 +91,4 @@ _Avoid_: MCP (intervu is a CLI, not an MCP server)
 - "prompt" was used (in `SessionStore.queuePrompts`) for what the user stories call **Feedback**. Resolved: the concept is **Feedback**; "prompt" is retired to avoid colliding with the LLM-prompt sense, and the store op becomes `queueFeedback` / `takeFeedback`.
 - **Presence** had two conflicting state triples: story #10 said listening/working/idle, `SessionHub` said listening/working/waiting. Resolved: the canonical states are **idle / listening / working** (human-facing); "waiting" is retired as the agent's-eye view of **listening**.
 - **Session** key was described as "content-addressed", but the agent live-edits the artifact, so a content-derived key would break mid-review. Resolved: the key is **path-based** - `hash(realpath(artifact))` - stable across edits; identical content at two paths is two Sessions; renaming an artifact mid-review is not a supported flow.
+- **TOON** is defined as the format for "all CLI output", but the **SSE stream** (#7) is browser-facing, consumed by `EventSource`/JS. Resolved: TOON is the **CLI stdout** format only; the SSE channel carries **JSON** frames. "All output is TOON" scopes to the CLI, not the browser wire.
