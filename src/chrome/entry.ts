@@ -1,14 +1,15 @@
-import { postToFrame } from "../sdk/bridge.ts";
-import type { AnnotateMode } from "../sdk/protocol.ts";
+import { onMessageFromFrame, postToFrame } from "../sdk/bridge.ts";
+import type { AnnotateMode, Annotation } from "../sdk/protocol.ts";
 
 /**
  * The chrome controller (CONTEXT.md "Chrome"; ADR 0004 / 0006), served at
  * `/chrome.js` and loaded by the chrome page that wraps the artifact iframe.
- * Plain DOM TypeScript, no Effect. This slice owns the top-bar behaviour: the
- * two working-copy controls and the Annotate-mode toggle, which flips its
- * pressed state and tells the in-iframe SDK over the Bridge. The pending-
- * annotations list and its rows arrive with click/text capture; the panel ships
- * here as the honest empty shell.
+ * Plain DOM TypeScript, no Effect. It owns the top-bar controls and the
+ * Annotate-mode toggle (which flips its pressed state and tells the in-iframe SDK
+ * over the Bridge), and the "Pending annotations" panel: each `annotation-added`
+ * from the iframe appends a numbered row, and removing a row sends
+ * `annotation-removed` back so the SDK clears the matching marker. Stacked
+ * annotations are renumbered to stay in step with the in-artifact badges.
  */
 
 interface ChromeConfig {
@@ -84,6 +85,98 @@ const wireToggle = (iframe: HTMLIFrameElement): void => {
   });
 };
 
+/**
+ * Build a pending-annotation row from untrusted artifact data using only
+ * `textContent`, so a selector or snippet can never inject markup. The badge
+ * number is filled in by `renumber`; the row carries its annotation id for
+ * removal. The class strings are static literals so the build-time Tailwind scan
+ * (ADR 0004) catches them.
+ */
+const buildRow = (
+  annotation: Annotation,
+  onRemove: () => void,
+): HTMLLIElement => {
+  const row = document.createElement("li");
+  row.dataset.pendingId = annotation.id;
+  row.className =
+    "mb-2 flex items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-[13px]";
+
+  const badge = document.createElement("span");
+  badge.dataset.badge = "";
+  badge.className =
+    "mt-px inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground";
+  row.append(badge);
+
+  const body = document.createElement("div");
+  body.className = "min-w-0 flex-1";
+  const label = document.createElement("span");
+  label.className = "block font-mono text-xs text-foreground";
+  label.textContent = `<${annotation.tag}>`;
+  const detail = document.createElement("span");
+  detail.className = "block truncate text-muted-foreground";
+  detail.textContent =
+    annotation.kind === "text"
+      ? `"${annotation.selectedText}"`
+      : annotation.text;
+  body.append(label, detail);
+  row.append(body);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className =
+    "ml-1 shrink-0 cursor-pointer rounded px-1 text-base leading-none text-muted-foreground hover:text-foreground";
+  remove.setAttribute("aria-label", "Remove annotation");
+  remove.textContent = "×";
+  remove.addEventListener("click", onRemove);
+  row.append(remove);
+
+  return row;
+};
+
+const wirePending = (iframe: HTMLIFrameElement): void => {
+  const list = document.querySelector("[data-pending-list]");
+  const empty = document.querySelector("[data-pending-empty]");
+  if (!(list instanceof HTMLUListElement) || !(empty instanceof HTMLElement)) {
+    return;
+  }
+
+  const renumber = (): void => {
+    list.querySelectorAll("[data-badge]").forEach((badge, index) => {
+      badge.textContent = String(index + 1);
+    });
+  };
+
+  const syncEmpty = (): void => {
+    const hasRows = list.children.length > 0;
+    list.classList.toggle("hidden", !hasRows);
+    empty.classList.toggle("hidden", hasRows);
+  };
+
+  const removeAnnotation = (id: string): void => {
+    const row = list.querySelector(`[data-pending-id="${CSS.escape(id)}"]`);
+    if (row === null) {
+      return;
+    }
+    row.remove();
+    renumber();
+    syncEmpty();
+    const frame = iframe.contentWindow;
+    if (frame !== null) {
+      postToFrame(frame, { kind: "annotation-removed", id });
+    }
+  };
+
+  onMessageFromFrame(iframe, (message) => {
+    if (message.kind !== "annotation-added") {
+      return;
+    }
+    const annotation = message.annotation;
+    list.append(buildRow(annotation, () => removeAnnotation(annotation.id)));
+    renumber();
+    syncEmpty();
+  });
+};
+
 const main = (): void => {
   const config = readConfig();
   if (config === null) {
@@ -96,6 +189,7 @@ const main = (): void => {
   const iframe = document.querySelector("[data-artifact]");
   if (iframe instanceof HTMLIFrameElement) {
     wireToggle(iframe);
+    wirePending(iframe);
   }
 };
 

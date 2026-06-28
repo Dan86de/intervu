@@ -13,5 +13,5 @@
   // Override the root's `exclude` (which hides these dirs from the DOM-free
   // daemon typecheck) so they are this config's inputs instead.
   "exclude": [],
-  "include": ["src/sdk/**/*.ts", "src/chrome/**/*.ts"]
+  "include": ["src/sdk/**/*.ts", "src/chrome/**/*.ts", "tests/sdk/**/*.ts"]
 }

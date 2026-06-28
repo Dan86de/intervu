@@ -10,6 +10,7 @@
     "@tailwindcss/cli": "^4",
     "@types/bun": "latest",
     "@typescript/native-preview": "^7.0.0-dev.20260628.1",
+    "happy-dom": "^20.10.6",
     "tailwindcss": "^4",
     "vitest": "^4.1.9"
   },
@@ -18,6 +19,7 @@
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-beta.91",
+    "@medv/finder": "^4.0.2",
     "@toon-format/toon": "^2.3.0",
     "effect": "4.0.0-beta.91"
   },
