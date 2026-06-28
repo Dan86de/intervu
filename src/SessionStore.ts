@@ -9,7 +9,7 @@ import {
   SynchronizedRef,
 } from "effect";
 import * as Context from "effect/Context";
-import type { Feedback } from "./Protocol.ts";
+import { ConversationEntry, type Feedback, type Role } from "./Protocol.ts";
 import { Session, SessionKey } from "./Session.ts";
 import { SessionPersistence } from "./SessionPersistence.ts";
 
@@ -27,6 +27,12 @@ type StoreError = PlatformError.PlatformError | Schema.SchemaError;
  * transient, and durability across a killed poll is met by the daemon being the
  * single long-lived owner. `takeFeedback` drains a key's queue exactly once and
  * is the single source of truth for what a poll returns (ADR 0009).
+ *
+ * Beside the queues lives the per-key Conversation (ADR 0010): the daemon-owned,
+ * in-memory ordered thread of the human's Feedback messages and the agent's
+ * Agent-replies, each entry carrying a monotonic `seq`. It is the single source
+ * of truth the SSE route replays on connect and appends to live; like the
+ * queues it is transient and never persisted.
  */
 export class SessionStore extends Context.Service<
   SessionStore,
@@ -44,6 +50,18 @@ export class SessionStore extends Context.Service<
     readonly takeFeedback: (
       key: SessionKey,
     ) => Effect.Effect<readonly Feedback[]>;
+    readonly appendConversation: (
+      key: SessionKey,
+      entry: {
+        readonly role: Role;
+        readonly text: string;
+        readonly annotationCount: number;
+      },
+    ) => Effect.Effect<ConversationEntry>;
+    readonly conversationSince: (
+      key: SessionKey,
+      afterSeq: number,
+    ) => Effect.Effect<readonly ConversationEntry[]>;
   }
 >()("@intervu/SessionStore") {
   static readonly layer = Layer.effect(
@@ -54,6 +72,9 @@ export class SessionStore extends Context.Service<
       const ref = yield* SynchronizedRef.make(yield* persistence.load);
       const queues = yield* Ref.make(
         new Map<SessionKey, readonly Feedback[]>(),
+      );
+      const conversations = yield* Ref.make(
+        new Map<SessionKey, readonly ConversationEntry[]>(),
       );
 
       /** Path-based key: SHA-256 hex of the realpath, truncated to 16 (ADR 0001). */
@@ -131,6 +152,43 @@ export class SessionStore extends Context.Service<
         });
       });
 
+      // Append one Conversation entry and stamp it with the next `seq` for the
+      // key (1-based, monotonic, gap-free since nothing is ever removed), so the
+      // returned entry is exactly what the SSE route frames with `id: <seq>`.
+      const appendConversation = Effect.fn("SessionStore.appendConversation")(
+        function* (
+          key: SessionKey,
+          entry: {
+            readonly role: Role;
+            readonly text: string;
+            readonly annotationCount: number;
+          },
+        ) {
+          return yield* Ref.modify(conversations, (map) => {
+            const existing = map.get(key) ?? [];
+            const appended = new ConversationEntry({
+              seq: existing.length + 1,
+              role: entry.role,
+              text: entry.text,
+              annotationCount: entry.annotationCount,
+            });
+            const next = new Map(map);
+            next.set(key, [...existing, appended]);
+            return [appended, next] as const;
+          });
+        },
+      );
+
+      // The replay slice for an SSE (re)connect: every entry newer than the
+      // client's `Last-Event-ID` (0 on a first connect). `EventSource` reconnects
+      // without clearing the thread, so replaying only newer entries never dupes.
+      const conversationSince = Effect.fn("SessionStore.conversationSince")(
+        function* (key: SessionKey, afterSeq: number) {
+          const map = yield* Ref.get(conversations);
+          return (map.get(key) ?? []).filter((entry) => entry.seq > afterSeq);
+        },
+      );
+
       return {
         open,
         get,
@@ -138,6 +196,8 @@ export class SessionStore extends Context.Service<
         list,
         queueFeedback,
         takeFeedback,
+        appendConversation,
+        conversationSince,
       };
     }),
   );

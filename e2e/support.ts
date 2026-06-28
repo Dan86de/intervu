@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as nodePath from "node:path";
 import {
   type APIRequestContext,
   expect,
@@ -27,14 +30,15 @@ const modeSelector = (mode: "on" | "off"): string =>
 export const artifactFrame = (page: Page): FrameLocator =>
   page.frameLocator("[data-artifact]");
 
-/** Open a session for the fixture and navigate to its chrome page. */
-export const openArtifact = async (
+/** Open a session for an artifact at `path` and navigate to its chrome page. */
+export const openPath = async (
   page: Page,
   request: APIRequestContext,
   baseURL: string,
-): Promise<void> => {
+  path: string,
+): Promise<string> => {
   const response = await request.post(`${baseURL}/sessions`, {
-    data: { path: fixturePath },
+    data: { path },
   });
   expect(response.ok()).toBe(true);
   const body: unknown = await response.json();
@@ -49,7 +53,33 @@ export const openArtifact = async (
   await page.goto(`${baseURL}/s/${key}`);
   // The SDK has loaded inside the iframe once it has stamped the mode attribute.
   await artifactFrame(page).locator(modeSelector("off")).waitFor();
+  return key ?? "";
 };
+
+/** Open a session for the committed fixture and navigate to its chrome page. */
+export const openArtifact = async (
+  page: Page,
+  request: APIRequestContext,
+  baseURL: string,
+): Promise<void> => {
+  await openPath(page, request, baseURL, fixturePath);
+};
+
+/**
+ * Write a throwaway artifact to a fresh temp directory and return its realpath -
+ * a unique path means a unique Session, so file-editing specs stay isolated and
+ * never touch the committed fixture. Includes a clickable element for annotation.
+ */
+export const tempArtifact = (headline: string): string => {
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "intervu-e2e-art-"));
+  const file = nodePath.join(dir, "artifact.html");
+  fs.writeFileSync(file, artifactHtml(headline));
+  return fs.realpathSync(file);
+};
+
+/** The throwaway artifact's HTML, parameterized by its headline text. */
+export const artifactHtml = (headline: string): string =>
+  `<!doctype html><html><head><title>temp artifact</title></head><body><h1 id="headline">${headline}</h1><button id="native-btn" type="button">Native</button></body></html>`;
 
 /** Turn Annotate-mode on and wait for the SDK to reflect it inside the iframe. */
 export const armAnnotate = async (page: Page): Promise<void> => {

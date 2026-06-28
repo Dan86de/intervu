@@ -158,14 +158,16 @@ const sendButtonClass =
 
 /**
  * Render the chrome page for a session (ADR 0004): a slim Tailwind/shadcn top bar
- * - filename, the Annotate-mode toggle, and the two working-copy controls - over
- * a stage pairing the artifact's sandboxed, opaque-origin iframe (ADR 0003) with
- * a conversation panel. Behaviour lives in the built controller at `/chrome.js`,
- * fed the session's paths through the inline JSON config; styling is the
- * build-time Tailwind output at `/chrome.css`. The iframe `src` is `/s/:key/a/`,
- * so the artifact's relative URLs resolve under that prefix with no `<base>` tag
- * and no URL rewriting. The panel pins a composer (message + Send to Agent) to
- * its bottom; the in-panel conversation thread arrives in #7.
+ * - filename, a Presence indicator (dot + label), the Annotate-mode toggle, and
+ * the two working-copy controls - over a stage pairing the artifact's sandboxed,
+ * opaque-origin iframe (ADR 0003) with a conversation panel. Behaviour lives in
+ * the built controller at `/chrome.js`, fed the session's paths through the
+ * inline JSON config; styling is the build-time Tailwind output at `/chrome.css`.
+ * The iframe `src` is `/s/:key/a/`, so the artifact's relative URLs resolve under
+ * that prefix with no `<base>` tag and no URL rewriting. The panel renders the
+ * Conversation thread (replayed then appended live over the SSE stream; ADR 0010)
+ * above a composer (message + Send to Agent) pinned to its bottom. The Presence
+ * dot is authored at its idle color statically; `chrome.js` swaps the live colors.
  */
 export const renderChrome = (params: ChromeParams): string => {
   const safeFilename = escapeHtml(params.filename);
@@ -188,6 +190,10 @@ export const renderChrome = (params: ChromeParams): string => {
     <header class="flex h-11 flex-none items-center gap-3 border-b border-border bg-surface px-3">
       <span class="text-[13px] font-semibold tracking-[0.02em]">intervu</span>
       <span class="truncate text-[13px] text-muted-foreground" title="${escapeHtml(params.path)}">${safeFilename}</span>
+      <span class="flex flex-none items-center gap-1.5" data-presence title="agent presence">
+        <span class="h-2 w-2 rounded-full bg-zinc-400" data-presence-dot></span>
+        <span class="text-xs text-muted-foreground" data-presence-label>idle</span>
+      </span>
       <div class="ml-auto flex gap-2">
         <button type="button" class="${buttonClass} aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground" data-annotate-toggle aria-pressed="false">Annotate</button>
         <button type="button" class="${buttonClass}" data-copy-path>Copy path</button>
@@ -203,12 +209,13 @@ export const renderChrome = (params: ChromeParams): string => {
         data-artifact
       ></iframe>
       <aside class="flex w-80 flex-none flex-col border-l border-border bg-panel">
-        <div class="min-h-0 flex-1 overflow-y-auto p-4">
+        <div class="min-h-0 flex-1 overflow-y-auto p-4" data-panel-scroll>
           <h2 class="m-0 mb-2 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">Pending annotations</h2>
           <p class="m-0 text-[13px] leading-relaxed text-muted-foreground" data-pending-empty>No annotations yet. Turn on Annotate, then point at elements and text in the artifact.</p>
           <ul class="m-0 mt-3 hidden list-none p-0" data-pending-list></ul>
           <h2 class="m-0 mb-2 mt-6 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">Conversation</h2>
-          <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">No feedback yet. The review loop arrives in a later slice.</p>
+          <p class="m-0 text-[13px] leading-relaxed text-muted-foreground" data-conversation-empty>No messages yet. Your feedback and the agent's replies will appear here.</p>
+          <div class="mt-3 flex flex-col gap-2" data-conversation></div>
         </div>
         <div class="flex-none border-t border-border p-3" data-composer>
           <textarea class="${composerInputClass}" data-composer-input rows="3" placeholder="Message to the agent..." aria-label="Message to the agent"></textarea>

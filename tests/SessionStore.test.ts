@@ -139,6 +139,85 @@ describe("SessionStore", () => {
     }).pipe(Effect.provide(storeLayer())),
   );
 
+  it.effect("appendConversation stamps a monotonic 1-based seq per key", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const session = yield* store.open("/tmp/a.html");
+
+      const first = yield* store.appendConversation(session.key, {
+        role: "human",
+        text: "tighten this",
+        annotationCount: 2,
+      });
+      const second = yield* store.appendConversation(session.key, {
+        role: "agent",
+        text: "done",
+        annotationCount: 0,
+      });
+
+      expect(first.seq).toBe(1);
+      expect(first.role).toBe("human");
+      expect(first.annotationCount).toBe(2);
+      expect(second.seq).toBe(2);
+      expect(second.role).toBe("agent");
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect(
+    "conversationSince replays only entries newer than the cursor",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* SessionStore;
+        const session = yield* store.open("/tmp/a.html");
+
+        yield* store.appendConversation(session.key, {
+          role: "human",
+          text: "one",
+          annotationCount: 0,
+        });
+        yield* store.appendConversation(session.key, {
+          role: "agent",
+          text: "two",
+          annotationCount: 0,
+        });
+
+        // A first connect (cursor 0) replays the whole thread; a reconnect at
+        // seq 1 replays only what it has not seen.
+        const all = yield* store.conversationSince(session.key, 0);
+        expect(all.map((entry) => entry.text)).toEqual(["one", "two"]);
+
+        const after = yield* store.conversationSince(session.key, 1);
+        expect(after.map((entry) => entry.text)).toEqual(["two"]);
+
+        const none = yield* store.conversationSince(session.key, 2);
+        expect(none).toHaveLength(0);
+      }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("conversations are keyed per Session", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const a = yield* store.open("/tmp/a.html");
+      const b = yield* store.open("/tmp/b.html");
+
+      yield* store.appendConversation(a.key, {
+        role: "human",
+        text: "for a",
+        annotationCount: 0,
+      });
+
+      const onB = yield* store.conversationSince(b.key, 0);
+      expect(onB).toHaveLength(0);
+      // B's first entry starts its own seq at 1, independent of A.
+      const bEntry = yield* store.appendConversation(b.key, {
+        role: "human",
+        text: "for b",
+        annotationCount: 0,
+      });
+      expect(bEntry.seq).toBe(1);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
   it.effect("a fresh store adopts persisted Sessions on startup", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;

@@ -58,6 +58,7 @@ export class ServerLifecycle extends Context.Service<
     readonly poll: (
       path: string,
       timeoutSeconds: Option.Option<number>,
+      agentReply: Option.Option<string>,
     ) => Effect.Effect<PollResponse, PollError>;
   }
 >()("@intervu/ServerLifecycle") {
@@ -141,11 +142,19 @@ export class ServerLifecycle extends Context.Service<
       // open at this path - a structured `ReviewNotOpen`, not feedback. The
       // request carries no response timeout, so an indefinite block is not
       // severed client-side.
-      const poll = (path: string, timeoutSeconds: Option.Option<number>) =>
+      const poll = (
+        path: string,
+        timeoutSeconds: Option.Option<number>,
+        agentReply: Option.Option<string>,
+      ) =>
         Effect.gen(function* () {
-          const body = Option.match(timeoutSeconds, {
+          const withTimeout = Option.match(timeoutSeconds, {
             onNone: () => ({ path }),
             onSome: (seconds) => ({ path, timeoutSeconds: seconds }),
+          });
+          const body = Option.match(agentReply, {
+            onNone: () => withTimeout,
+            onSome: (reply) => ({ ...withTimeout, agentReply: reply }),
           });
           const request = HttpClientRequest.post(`${baseUrl}/poll`).pipe(
             HttpClientRequest.bodyJsonUnsafe(body),

@@ -3,6 +3,7 @@ import { Console, Effect, FileSystem, Layer } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import { AppConfig, version } from "./AppConfig.ts";
+import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import { ArtifactNotFound, DaemonNotRunning } from "./Errors.ts";
@@ -74,7 +75,10 @@ const open = Command.make("open", { file: Argument.file("file") }, ({ file }) =>
  * artifact's realpath, require an already-running daemon (no spawn), then hold a
  * single request open until the human sends - printing the drained Feedback as
  * TOON. `--timeout <seconds>` bounds the wait and prints `timedOut: true`
- * instead. Killing and re-running is safe: queued Feedback survives.
+ * instead. `--agent-reply "<message>"` posts that message into the human's
+ * conversation panel before waiting again (ADR 0010), so the agent can explain
+ * what it changed and keep listening. Killing and re-running is safe: queued
+ * Feedback survives.
  */
 const poll = Command.make(
   "poll",
@@ -85,8 +89,13 @@ const poll = Command.make(
         "seconds to wait before returning timedOut (default: wait indefinitely)",
       ),
     ),
+    agentReply: Flag.optional(Flag.string("agent-reply")).pipe(
+      Flag.withDescription(
+        "post this message into the conversation panel before waiting again",
+      ),
+    ),
   },
-  ({ file, timeout }) =>
+  ({ file, timeout, agentReply }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const lifecycle = yield* ServerLifecycle;
@@ -96,7 +105,7 @@ const poll = Command.make(
         .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
 
       yield* lifecycle.requireHealthy;
-      const response = yield* lifecycle.poll(realPath, timeout);
+      const response = yield* lifecycle.poll(realPath, timeout, agentReply);
 
       const view = response.timedOut
         ? Output.pollTimedOut({
@@ -193,11 +202,15 @@ const args =
 
 const PlatformLayer = Layer.mergeAll(BunServices.layer, FetchHttpClient.layer);
 
+// `SessionHub` is provided once and re-exported, so the daemon's routes,
+// `FeedbackWait`, and the `ArtifactWatcher` all share the one hub instance - a
+// second hub would split publishes from subscribers.
 const AppLayer = Layer.mergeAll(
   SessionStore.layer,
-  SessionHub.layer,
   ServerLifecycle.layer,
+  ArtifactWatcher.layer,
 ).pipe(
+  Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),
   Layer.provideMerge(AppConfig.layer),
   Layer.provideMerge(PlatformLayer),

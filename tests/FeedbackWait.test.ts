@@ -34,6 +34,15 @@ const awaitSubscribed = (key: SessionKey) =>
     }
   });
 
+/** Block until the forked wait has entered its poll (presence is listening). */
+const awaitListening = (key: SessionKey) =>
+  Effect.gen(function* () {
+    const hub = yield* SessionHub;
+    while ((yield* hub.presence(key)) !== "listening") {
+      yield* Effect.yieldNow;
+    }
+  });
+
 describe("FeedbackWait.wait", () => {
   it.effect(
     "resolves with the queued feedback when a signal is published",
@@ -96,6 +105,63 @@ describe("FeedbackWait.wait", () => {
       const outcome = yield* Fiber.join(fiber);
       expect(outcome.timedOut).toBe(true);
       expect(outcome.feedback).toHaveLength(0);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("presence is listening while open, working after delivery", () =>
+    Effect.gen(function* () {
+      const hub = yield* SessionHub;
+      const store = yield* SessionStore;
+      const key = SessionKey.make("presence-deliver");
+
+      const fiber = yield* Effect.scoped(FeedbackWait.wait(key)).pipe(
+        Effect.forkChild,
+      );
+      yield* awaitListening(key);
+
+      yield* store.queueFeedback(key, feedbackWith("hi"));
+      yield* hub.publish(key, new FeedbackQueued());
+
+      const outcome = yield* Fiber.join(fiber);
+      expect(outcome.feedback).toHaveLength(1);
+      // The scope closed on completion, so the exit finalizer recorded a
+      // delivery: the agent took feedback and is now working.
+      expect(yield* hub.presence(key)).toBe("working");
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("a bounded timeout closes presence to idle, not working", () =>
+    Effect.gen(function* () {
+      const hub = yield* SessionHub;
+      const key = SessionKey.make("presence-timeout");
+
+      const fiber = yield* Effect.scoped(
+        FeedbackWait.wait(key, {
+          timeout: Option.some(Duration.seconds(30)),
+          heartbeat: Duration.seconds(60),
+        }),
+      ).pipe(Effect.forkChild);
+      yield* awaitListening(key);
+
+      yield* TestClock.adjust("30 seconds");
+      const outcome = yield* Fiber.join(fiber);
+      expect(outcome.timedOut).toBe(true);
+      expect(yield* hub.presence(key)).toBe("idle");
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("a killed poll closes presence to idle", () =>
+    Effect.gen(function* () {
+      const hub = yield* SessionHub;
+      const key = SessionKey.make("presence-kill");
+
+      const fiber = yield* Effect.scoped(FeedbackWait.wait(key)).pipe(
+        Effect.forkChild,
+      );
+      yield* awaitListening(key);
+
+      yield* Fiber.interrupt(fiber);
+      expect(yield* hub.presence(key)).toBe("idle");
     }).pipe(Effect.provide(testLayer)),
   );
 

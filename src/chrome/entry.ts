@@ -13,6 +13,12 @@ import type { AnnotateMode, Annotation } from "../sdk/protocol.ts";
  * daemon, and on success clears the composer, the rows, and the in-artifact
  * markers - preserving them on failure. Stacked annotations renumber to stay in
  * step with the in-artifact badges.
+ *
+ * It also opens the one server-to-browser SSE channel (ADR 0010) and fans its
+ * frames out: Presence changes drive the top-bar indicator, Conversation appends
+ * render as thread bubbles (the panel is purely SSE-driven, no optimistic local
+ * insert), and a reload nudge re-points the iframe `src` with a cache-bust query,
+ * re-posting the current Annotate-mode on load.
  */
 
 interface ChromeConfig {
@@ -362,6 +368,197 @@ const createComposer = (
   sync();
 };
 
+/** The Presence dot's color per state; static literals for the Tailwind scan. */
+const PRESENCE_DOTS = {
+  idle: "bg-zinc-400",
+  listening: "bg-emerald-500",
+  working: "bg-amber-500",
+} as const;
+
+type Presence = keyof typeof PRESENCE_DOTS;
+
+const isPresence = (value: unknown): value is Presence =>
+  value === "idle" || value === "listening" || value === "working";
+
+/**
+ * Drive the top-bar Presence indicator (ADR 0010): swap the dot's color class and
+ * the text label to the pushed state. The label is for accessibility, the dot for
+ * glanceability; the colors are authored statically so the build-time Tailwind
+ * scan captures them.
+ */
+const wirePresence = (): ((presence: Presence) => void) => {
+  const dot = document.querySelector("[data-presence-dot]");
+  const label = document.querySelector("[data-presence-label]");
+  return (presence) => {
+    if (dot instanceof HTMLElement) {
+      dot.className = `h-2 w-2 rounded-full ${PRESENCE_DOTS[presence]}`;
+    }
+    if (label instanceof HTMLElement) {
+      label.textContent = presence;
+    }
+  };
+};
+
+/** One Conversation entry as the chrome receives it over the SSE stream. */
+interface ConversationEntry {
+  readonly seq: number;
+  readonly role: "human" | "agent";
+  readonly text: string;
+  readonly annotationCount: number;
+}
+
+const isConversationEntry = (value: unknown): value is ConversationEntry =>
+  typeof value === "object" &&
+  value !== null &&
+  "seq" in value &&
+  typeof value.seq === "number" &&
+  "role" in value &&
+  (value.role === "human" || value.role === "agent") &&
+  "text" in value &&
+  typeof value.text === "string" &&
+  "annotationCount" in value &&
+  typeof value.annotationCount === "number";
+
+const ROLE_LABEL = { human: "Human", agent: "Agent" } as const;
+const BUBBLE_BASE =
+  "max-w-[85%] rounded-lg px-2.5 py-1.5 text-[13px] leading-relaxed";
+const BUBBLE_ROLE = {
+  human: "self-end bg-primary text-primary-foreground",
+  agent: "self-start bg-accent text-foreground",
+} as const;
+
+/**
+ * Render the Conversation thread purely from SSE frames (ADR 0010): append one
+ * bubble per entry - agent left on a muted surface, human right with a primary
+ * tint, each labeled - keyed by `seq` so a replayed-then-live overlap is
+ * idempotent, auto-scrolling to the latest. An annotation-only human Feedback
+ * carries an empty message, so it renders its annotation count, never a blank
+ * bubble. All text is set via `textContent`, so a message can never inject markup.
+ */
+const createConversation = (): ((entry: ConversationEntry) => void) => {
+  const container = document.querySelector("[data-conversation]");
+  const empty = document.querySelector("[data-conversation-empty]");
+  const scroller = document.querySelector("[data-panel-scroll]");
+  const seen = new Set<number>();
+  if (!(container instanceof HTMLElement)) {
+    return () => {};
+  }
+  return (entry) => {
+    if (seen.has(entry.seq)) {
+      return;
+    }
+    seen.add(entry.seq);
+
+    const bubble = document.createElement("div");
+    bubble.dataset.seq = String(entry.seq);
+    bubble.className = `${BUBBLE_BASE} ${BUBBLE_ROLE[entry.role]}`;
+
+    const label = document.createElement("span");
+    label.className =
+      "mb-0.5 block text-[10px] font-semibold uppercase tracking-[0.06em] opacity-70";
+    label.textContent = ROLE_LABEL[entry.role];
+    bubble.append(label);
+
+    const body = document.createElement("p");
+    body.className = "m-0 whitespace-pre-wrap break-words";
+    const trimmed = entry.text.trim();
+    if (trimmed.length === 0 && entry.annotationCount > 0) {
+      body.classList.add("italic", "opacity-80");
+      body.textContent = `${entry.annotationCount} annotation${
+        entry.annotationCount === 1 ? "" : "s"
+      }`;
+    } else {
+      body.textContent = entry.text;
+    }
+    bubble.append(body);
+
+    container.append(bubble);
+    if (empty instanceof HTMLElement) {
+      empty.classList.add("hidden");
+    }
+    if (scroller instanceof HTMLElement) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  };
+};
+
+/** The chrome's current Annotate-mode, read from the toggle's pressed state. */
+const currentMode = (): AnnotateMode =>
+  document
+    .querySelector("[data-annotate-toggle]")
+    ?.getAttribute("aria-pressed") === "true"
+    ? "on"
+    : "off";
+
+/**
+ * Live-reload the artifact in place (ADR 0010). The opaque-origin iframe can't be
+ * `location.reload()`-ed from the parent, so a reload reassigns its `src` with a
+ * cache-bust query - which the daemon ignores for relative-asset resolution. On
+ * every (re)load the chrome re-posts the current Annotate-mode down the Bridge, so
+ * an edit never silently resets the mode the human left on. Returns the reload
+ * trigger the SSE channel calls; pending rows survive (they live in the chrome),
+ * the in-iframe markers do not.
+ */
+const wireLiveReload = (
+  iframe: HTMLIFrameElement,
+  config: ChromeConfig,
+): (() => void) => {
+  let bust = 0;
+  iframe.addEventListener("load", () => {
+    const frame = iframe.contentWindow;
+    if (frame !== null) {
+      postToFrame(frame, { kind: "set-mode", mode: currentMode() });
+    }
+  });
+  return () => {
+    bust += 1;
+    iframe.src = `/s/${config.key}/a/?r=${bust}`;
+  };
+};
+
+/**
+ * Open the one server-to-browser SSE channel (ADR 0010) and fan its frames out to
+ * the indicator, the thread, and the iframe reload. `EventSource` reconnects
+ * transparently and resumes the thread from `Last-Event-ID`, so a dropped
+ * connection never duplicates a bubble. Every frame is untrusted JSON, validated
+ * before it touches the DOM.
+ */
+const createLiveChannel = (
+  config: ChromeConfig,
+  handlers: {
+    readonly setPresence: (presence: Presence) => void;
+    readonly appendConversation: (entry: ConversationEntry) => void;
+    readonly reload: () => void;
+  },
+): void => {
+  const source = new EventSource(`/s/${config.key}/events`);
+  source.addEventListener("message", (event) => {
+    let data: unknown;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (typeof data !== "object" || data === null || !("_tag" in data)) {
+      return;
+    }
+    if (
+      data._tag === "PresenceChanged" &&
+      "presence" in data &&
+      isPresence(data.presence)
+    ) {
+      handlers.setPresence(data.presence);
+    } else if (
+      data._tag === "ConversationAppended" &&
+      isConversationEntry(data)
+    ) {
+      handlers.appendConversation(data);
+    } else if (data._tag === "ArtifactReloaded") {
+      handlers.reload();
+    }
+  });
+};
+
 const main = (): void => {
   const config = readConfig();
   if (config === null) {
@@ -376,6 +573,12 @@ const main = (): void => {
     wireToggle(iframe);
     const pending = createPending(iframe);
     createComposer(iframe, config, pending);
+    const reload = wireLiveReload(iframe, config);
+    createLiveChannel(config, {
+      setPresence: wirePresence(),
+      appendConversation: createConversation(),
+      reload,
+    });
   }
 };
 

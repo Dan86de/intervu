@@ -81,12 +81,47 @@ export const ValidFeedback = Feedback.check(
  * `POST /poll` request body (ADR 0009): the artifact's resolved realpath, which
  * the daemon looks up without creating. `timeoutSeconds`, when present, bounds
  * the long-poll and turns an expiry into a `timedOut` response; absent means the
- * default indefinite block.
+ * default indefinite block. `agentReply`, when present and non-blank, is posted
+ * into the Conversation as an Agent-reply (#7) before the wait begins; blank or
+ * absent just polls.
  */
 export class PollRequest extends Schema.Class<PollRequest>("PollRequest")({
   path: Schema.String,
   timeoutSeconds: Schema.optional(Schema.Number),
+  agentReply: Schema.optional(Schema.String),
 }) {}
+
+/**
+ * Who authored a Conversation entry (CONTEXT.md "Conversation"): the reviewer's
+ * Feedback message (`human`) or the agent's Agent-reply (`agent`).
+ */
+export const Role = Schema.Literals(["human", "agent"]);
+export type Role = typeof Role.Type;
+
+/**
+ * One entry in a Session's Conversation (#7): the daemon-owned, in-memory thread
+ * the chrome renders. `seq` is monotonic per Session and doubles as the SSE
+ * `Last-Event-ID` replay cursor. `annotationCount` is load-bearing - an
+ * annotation-only human Feedback carries an empty `text`, so the chrome renders
+ * the count rather than a blank bubble. No timestamps this slice.
+ */
+export class ConversationEntry extends Schema.Class<ConversationEntry>(
+  "ConversationEntry",
+)({
+  seq: Schema.Number,
+  role: Role,
+  text: Schema.String,
+  annotationCount: Schema.Number,
+}) {}
+
+/**
+ * The human-facing agent state in the review loop (CONTEXT.md "Presence"):
+ * `idle` (no agent poll open), `listening` (a poll is open, ready for feedback),
+ * or `working` (the agent took feedback and is not currently polling). Derived in
+ * `SessionHub` and pushed over the SSE stream.
+ */
+export const Presence = Schema.Literals(["idle", "listening", "working"]);
+export type Presence = typeof Presence.Type;
 
 /**
  * `POST /poll` response body: either the drained feedback (`timedOut: false`,

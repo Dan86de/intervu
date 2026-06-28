@@ -1,4 +1,13 @@
-import { Duration, Effect, FileSystem, Layer, Option, Path } from "effect";
+import {
+  Duration,
+  Effect,
+  FileSystem,
+  Filter,
+  Layer,
+  Option,
+  Path,
+  Stream,
+} from "effect";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -6,6 +15,7 @@ import {
 } from "effect/unstable/http";
 import { AppConfig } from "./AppConfig.ts";
 import * as ArtifactAssets from "./ArtifactAssets.ts";
+import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import * as FeedbackWait from "./FeedbackWait.ts";
 import {
@@ -15,8 +25,13 @@ import {
   ValidFeedback,
 } from "./Protocol.ts";
 import { type Session, SessionKey } from "./Session.ts";
-import { FeedbackQueued, SessionHub } from "./SessionHub.ts";
+import {
+  ConversationAppended,
+  FeedbackQueued,
+  SessionHub,
+} from "./SessionHub.ts";
 import { SessionStore } from "./SessionStore.ts";
+import * as Sse from "./Sse.ts";
 
 /**
  * The daemon's HTTP surface (issues #3, #4). Routes are total - each handler
@@ -182,6 +197,13 @@ const sourceRoute = HttpRouter.add(
  * message or >=1 annotation), so a malformed or empty submission is a `400` and
  * the queue never holds an empty Feedback. `queueFeedback` then `publish` order
  * is load-bearing: a poll that subscribed first sees the signal and drains.
+ *
+ * A Send also appends the human's message to the Conversation and publishes a
+ * `ConversationAppended` (ADR 0010), so the chrome renders it from the SSE
+ * stream rather than an optimistic local insert. The two events are distinct:
+ * `FeedbackQueued` stays payload-free (the poll's wake-signal; ADR 0009) and the
+ * thread frame carries the entry. `annotationCount` lets the chrome render an
+ * annotation-only Feedback (empty message) as a count, not a blank bubble.
  */
 const feedbackRoute = HttpRouter.add(
   "POST",
@@ -193,6 +215,12 @@ const feedbackRoute = HttpRouter.add(
       const feedback = yield* HttpServerRequest.schemaBodyJson(ValidFeedback);
       yield* store.queueFeedback(session.key, feedback);
       yield* hub.publish(session.key, new FeedbackQueued());
+      const entry = yield* store.appendConversation(session.key, {
+        role: "human",
+        text: feedback.message,
+        annotationCount: feedback.annotations.length,
+      });
+      yield* hub.publish(session.key, new ConversationAppended({ entry }));
       return HttpServerResponse.jsonUnsafe({ queued: true });
     }).pipe(
       Effect.catch((error) =>
@@ -211,12 +239,18 @@ const feedbackRoute = HttpRouter.add(
  * the human sends (or returning the `timedOut` marker when the request set a
  * bound). `Effect.scoped` ties the hub subscription to the request: a killed
  * poll interrupts this fiber and releases it.
+ *
+ * A non-blank `agentReply` is posted into the Conversation (ADR 0010) before the
+ * wait begins, so the reply reaches the chrome over the SSE stream immediately -
+ * not on this response, which stays held open for minutes. A blank or absent
+ * reply is a no-op and just polls.
  */
 const pollRoute = HttpRouter.add(
   "POST",
   "/poll",
   Effect.gen(function* () {
     const store = yield* SessionStore;
+    const hub = yield* SessionHub;
     const request = yield* HttpServerRequest.schemaBodyJson(PollRequest);
     const session = yield* store.getByPath(request.path);
     return yield* Option.match(session, {
@@ -229,21 +263,29 @@ const pollRoute = HttpRouter.add(
         ),
       onSome: (open) =>
         Effect.scoped(
-          FeedbackWait.wait(open.key, {
-            timeout: Option.map(
-              Option.fromNullishOr(request.timeoutSeconds),
-              Duration.seconds,
-            ),
-          }).pipe(
-            Effect.flatMap((outcome) =>
-              HttpServerResponse.schemaJson(PollResponse)(
-                new PollResponse({
-                  timedOut: outcome.timedOut,
-                  feedback: outcome.feedback,
-                }),
+          Effect.gen(function* () {
+            const reply = request.agentReply?.trim() ?? "";
+            if (reply.length > 0) {
+              const entry = yield* store.appendConversation(open.key, {
+                role: "agent",
+                text: reply,
+                annotationCount: 0,
+              });
+              yield* hub.publish(open.key, new ConversationAppended({ entry }));
+            }
+            const outcome = yield* FeedbackWait.wait(open.key, {
+              timeout: Option.map(
+                Option.fromNullishOr(request.timeoutSeconds),
+                Duration.seconds,
               ),
-            ),
-          ),
+            });
+            return yield* HttpServerResponse.schemaJson(PollResponse)(
+              new PollResponse({
+                timedOut: outcome.timedOut,
+                feedback: outcome.feedback,
+              }),
+            );
+          }),
         ),
     });
   }).pipe(
@@ -252,6 +294,67 @@ const pollRoute = HttpRouter.add(
         Effect.as(HttpServerResponse.empty({ status: 500 })),
       ),
     ),
+  ),
+);
+
+/** The `: ping` heartbeat cadence on the SSE stream (ADR 0010 insurance). */
+const SSE_PING_INTERVAL = Duration.seconds(20);
+
+/**
+ * The single server-to-browser SSE channel (ADR 0010): one `text/event-stream`
+ * response multiplexing live-reload, Conversation appends, and Presence. On
+ * connect it replays the Conversation newer than `Last-Event-ID` plus the current
+ * Presence, then streams live hub frames merged with a `: ping` heartbeat;
+ * `FeedbackQueued` is filtered out so the poll's wake-signal never reaches the
+ * browser. The hub subscription and the watcher ref-count ride the body stream's
+ * scope (`Stream.unwrap` manages it), released when `BunHttpServer` interrupts
+ * the handler on client disconnect - the same abort wiring as the poll (ADR
+ * 0009). The handler's context is captured and re-provided to the body, which the
+ * server runs after the handler returns.
+ */
+const eventsRoute = HttpRouter.add(
+  "GET",
+  "/s/:key/events",
+  withSession((session) =>
+    Effect.gen(function* () {
+      const services = yield* Effect.context<
+        SessionHub | SessionStore | ArtifactWatcher
+      >();
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const afterSeq = Sse.parseLastEventId(request.headers["last-event-id"]);
+
+      const body = Stream.unwrap(
+        Effect.gen(function* () {
+          const hub = yield* SessionHub;
+          const store = yield* SessionStore;
+          const watcher = yield* ArtifactWatcher;
+          const subscription = yield* hub.subscribe(session.key);
+          yield* watcher.track(session.key, session.path);
+
+          const replay = yield* store.conversationSince(session.key, afterSeq);
+          const presence = yield* hub.presence(session.key);
+          const initial = Stream.fromIterable([
+            ...replay.map(Sse.conversationFrame),
+            Sse.presenceFrame(presence),
+          ]);
+          const live = Stream.fromSubscription(subscription).pipe(
+            Stream.filterMap(Filter.fromPredicateOption(Sse.liveFrame)),
+          );
+          const heartbeat = Stream.tick(SSE_PING_INTERVAL).pipe(
+            Stream.map(() => Sse.PING_FRAME),
+          );
+          return Stream.concat(initial, Stream.merge(live, heartbeat));
+        }),
+      ).pipe(Stream.encodeText, Stream.provideContext(services));
+
+      return HttpServerResponse.stream(body, {
+        contentType: "text/event-stream",
+        headers: {
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+        },
+      });
+    }),
   ),
 );
 
@@ -308,6 +411,7 @@ export const layer = HttpRouter.serve(
     sourceRoute,
     feedbackRoute,
     pollRoute,
+    eventsRoute,
     sdkRoute,
     chromeScriptRoute,
     chromeStyleRoute,

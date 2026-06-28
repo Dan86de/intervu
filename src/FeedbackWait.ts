@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, PubSub } from "effect";
+import { Duration, Effect, Option, PubSub, Ref } from "effect";
 import type { Feedback } from "./Protocol.ts";
 import type { SessionKey } from "./Session.ts";
 import { SessionHub } from "./SessionHub.ts";
@@ -38,22 +38,45 @@ export const wait = Effect.fn("FeedbackWait.wait")(function* (
   const heartbeat = options?.heartbeat ?? DEFAULT_HEARTBEAT;
   const timeout = options?.timeout ?? Option.none();
 
+  // Presence (ADR 0010): an open poll is "listening"; on close, a delivery means
+  // the agent took feedback ("working"), while a timeout or a killed poll closes
+  // without delivery and falls to "idle". The finalizer rides the caller's scope,
+  // so Bun's request-abort on a killed poll still records the exit. It is
+  // registered before `subscribe`, so on teardown it runs after the subscription
+  // is torn down (LIFO): `exitPoll` publishes a `PresenceChanged`, and publishing
+  // while this poll's own subscription still holds an interrupted poller is unsafe.
+  const delivered = yield* Ref.make(false);
+  yield* Effect.addFinalizer(() =>
+    Ref.get(delivered).pipe(Effect.flatMap((d) => hub.exitPoll(key, d))),
+  );
+
   // Subscribe before the first drain so a publish that races the drain still
   // wakes us (subscribe-then-drain).
   const subscription = yield* hub.subscribe(key);
+  yield* hub.enterPoll(key);
+
+  // The wake-signal is `FeedbackQueued` only; the hub now also carries presence
+  // and conversation frames, which must not spuriously re-drain the poll. Take
+  // until the queued signal, ignoring every other variant.
+  const awaitQueued: Effect.Effect<void> = PubSub.take(subscription).pipe(
+    Effect.flatMap((event) =>
+      event._tag === "FeedbackQueued" ? Effect.void : awaitQueued,
+    ),
+  );
 
   const drainOrWait: Effect.Effect<readonly Feedback[]> = Effect.gen(
     function* () {
       while (true) {
         const drained = yield* store.takeFeedback(key);
         if (drained.length > 0) {
+          yield* Ref.set(delivered, true);
           return drained;
         }
         // A tick re-loops and re-drains (still empty), so it keeps the wait
         // alive without resolving it; a signal wins the race and re-drains to
         // the queued Feedback. The subscription buffers across the interrupt,
         // so a tick never drops a signal.
-        yield* Effect.race(PubSub.take(subscription), Effect.sleep(heartbeat));
+        yield* Effect.race(awaitQueued, Effect.sleep(heartbeat));
       }
     },
   );
