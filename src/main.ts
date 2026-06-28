@@ -111,12 +111,43 @@ const poll = Command.make(
         ? Output.pollTimedOut({
             help: `no feedback within the timeout - run 'intervu poll ${file}' to keep listening`,
           })
-        : Output.pollFeedback({
-            feedback: response.feedback,
-            help: `feedback received - edit the artifact, then 'intervu poll ${file}' to listen again`,
-          });
+        : response.ended
+          ? Output.pollEnded({
+              feedback: response.feedback,
+              help: `review ended - apply any final feedback above, then stop; re-run 'intervu ${file}' to reopen`,
+            })
+          : Output.pollFeedback({
+              feedback: response.feedback,
+              help: `feedback received - edit the artifact, then 'intervu poll ${file}' to listen again`,
+            });
       yield* emit(yield* Toon.encode(view));
     }),
+);
+
+/**
+ * `intervu end <file>` (ADR 0011): the agent-facing end. Resolve the artifact's
+ * realpath, require an already-running daemon (no spawn, mirroring `poll`), then
+ * end the Session over `POST /end` and print the confirmation as TOON. No
+ * final-feedback rider - that is the chrome's Send & end. Re-running
+ * `intervu <file>` resurrects the path to a live review (ADR 0012).
+ */
+const end = Command.make("end", { file: Argument.file("file") }, ({ file }) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const lifecycle = yield* ServerLifecycle;
+
+    const realPath = yield* fs
+      .realPath(file)
+      .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+
+    yield* lifecycle.requireHealthy;
+    yield* lifecycle.end(realPath);
+
+    const view = Output.ended({
+      help: `review ended - re-run 'intervu ${file}' to reopen`,
+    });
+    yield* emit(yield* Toon.encode(view));
+  }),
 );
 
 /**
@@ -183,14 +214,14 @@ const stop = Command.make("stop", {}, () =>
   }),
 );
 
-const cli = root.pipe(Command.withSubcommands([open, poll, server, stop]));
+const cli = root.pipe(Command.withSubcommands([open, poll, end, server, stop]));
 
 /**
  * Bare `intervu <file>` aliases `intervu open <file>`. The CLI framework can't
  * mix a root positional argument with subcommands, so an unrecognized leading
  * token that isn't a flag is rewritten to `open <file>` before parsing.
  */
-const knownSubcommands = new Set(["open", "poll", "server", "stop"]);
+const knownSubcommands = new Set(["open", "poll", "end", "server", "stop"]);
 const rawArgs = process.argv.slice(2);
 const firstArg = rawArgs[0];
 const args =

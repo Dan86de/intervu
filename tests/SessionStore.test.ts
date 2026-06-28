@@ -126,6 +126,83 @@ describe("SessionStore", () => {
     }).pipe(Effect.provide(storeLayer())),
   );
 
+  it.effect("end flips open -> ended and persists", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const session = yield* store.open("/tmp/a.html");
+
+      yield* store.end(session.key);
+
+      const found = yield* store.get(session.key);
+      expect(Option.getOrUndefined(found)?.status).toBe("ended");
+
+      const persistence = yield* SessionPersistence;
+      const persisted = yield* persistence.load;
+      expect(persisted[0]?.status).toBe("ended");
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("end is idempotent on an already-ended Session", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const session = yield* store.open("/tmp/a.html");
+
+      yield* store.end(session.key);
+      // A second end is a no-op: still ended, still one Session.
+      yield* store.end(session.key);
+
+      const found = yield* store.get(session.key);
+      expect(Option.getOrUndefined(found)?.status).toBe("ended");
+      const all = yield* store.list;
+      expect(all).toHaveLength(1);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("end on an unknown key is a no-op, not an error", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      yield* store.end(SessionKey.make("ffffffffffffffff"));
+      const all = yield* store.list;
+      expect(all).toHaveLength(0);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("re-opening an ended Session resurrects it to open", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const first = yield* store.open("/tmp/a.html");
+      yield* store.end(first.key);
+
+      const resurrected = yield* store.open("/tmp/a.html");
+
+      // Same key, back to open, no duplicate state (ADR 0012).
+      expect(resurrected.key).toBe(first.key);
+      expect(resurrected.status).toBe("open");
+      const all = yield* store.list;
+      expect(all).toHaveLength(1);
+
+      const persistence = yield* SessionPersistence;
+      const persisted = yield* persistence.load;
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]?.status).toBe("open");
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("end preserves the queued feedback for a resurrect", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const session = yield* store.open("/tmp/a.html");
+      yield* store.queueFeedback(session.key, feedbackWith("survives"));
+
+      // end touches only status + persistence, never the transient queue (ADR 0002).
+      yield* store.end(session.key);
+      yield* store.open("/tmp/a.html");
+
+      const drained = yield* store.takeFeedback(session.key);
+      expect(drained.map((feedback) => feedback.message)).toEqual(["survives"]);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
   it.effect("getByPath resolves the same Session as the derived key", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;

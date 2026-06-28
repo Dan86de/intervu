@@ -38,6 +38,7 @@ export class SessionStore extends Context.Service<
   SessionStore,
   {
     readonly open: (path: string) => Effect.Effect<Session, StoreError>;
+    readonly end: (key: SessionKey) => Effect.Effect<void, StoreError>;
     readonly get: (key: SessionKey) => Effect.Effect<Option.Option<Session>>;
     readonly getByPath: (
       path: string,
@@ -97,13 +98,48 @@ export class SessionStore extends Context.Service<
             const key = yield* deriveKey(path);
             const existing = sessions.find((session) => session.key === key);
             if (existing !== undefined) {
-              // Idempotent re-open: resume the Session, no duplicate state.
-              return [existing, sessions] as const;
+              if (existing.status === "open") {
+                // Idempotent re-open: resume the Session, no duplicate state.
+                return [existing, sessions] as const;
+              }
+              // Resurrect an `ended` Session to `open` (ADR 0012): same key, no
+              // duplicate state, so re-running `intervu <file>` revives a review.
+              const resurrected = new Session({ key, path, status: "open" });
+              const next = sessions.map((session) =>
+                session.key === key ? resurrected : session,
+              );
+              yield* persistence.save(next);
+              return [resurrected, next] as const;
             }
             const session = new Session({ key, path, status: "open" });
             const next = [...sessions, session];
             yield* persistence.save(next);
             return [session, next] as const;
+          }),
+        );
+      });
+
+      // Flip `open -> ended` and persist (ADR 0012). Idempotent: ending an
+      // already-`ended` Session (or an unknown key) is a no-op that touches
+      // neither the set nor the state file. The transient queue and Conversation
+      // are deliberately untouched (ADR 0002) - a later resurrect resumes them.
+      const end = Effect.fn("SessionStore.end")(function* (key: SessionKey) {
+        yield* SynchronizedRef.modifyEffect(ref, (sessions) =>
+          Effect.gen(function* () {
+            const existing = sessions.find((session) => session.key === key);
+            if (existing === undefined || existing.status === "ended") {
+              return [undefined, sessions] as const;
+            }
+            const ended = new Session({
+              key,
+              path: existing.path,
+              status: "ended",
+            });
+            const next = sessions.map((session) =>
+              session.key === key ? ended : session,
+            );
+            yield* persistence.save(next);
+            return [undefined, next] as const;
           }),
         );
       });
@@ -191,6 +227,7 @@ export class SessionStore extends Context.Service<
 
       return {
         open,
+        end,
         get,
         getByPath,
         list,

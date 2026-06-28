@@ -138,6 +138,40 @@ describe("Output.pollTimedOut", () => {
   });
 });
 
+describe("Output.pollEnded", () => {
+  it("shapes a plain end (no final feedback) in canonical order", () => {
+    const view = Output.pollEnded({ feedback: [], help: "stop polling" });
+
+    expect(view).toEqual({ ended: true, feedback: [], help: "stop polling" });
+    expect(Object.keys(view)).toEqual(["ended", "feedback", "help"]);
+  });
+
+  it("carries the final feedback of a Send & end", () => {
+    const view = Output.pollEnded({
+      feedback: [
+        new Feedback({
+          message: "last word",
+          annotations: [],
+          domSnapshot: "x",
+        }),
+      ],
+      help: "stop",
+    });
+
+    expect(view.ended).toBe(true);
+    expect(view.feedback.map((item) => item.message)).toEqual(["last word"]);
+  });
+});
+
+describe("Output.ended", () => {
+  it("shapes the terminal end confirmation", () => {
+    const view = Output.ended({ help: "re-run to reopen" });
+
+    expect(view).toEqual({ ended: true, help: "re-run to reopen" });
+    expect(Object.keys(view)).toEqual(["ended", "help"]);
+  });
+});
+
 describe("Output.merge", () => {
   it("combines fragments with extra winning on conflict", () => {
     const merged = Output.merge(

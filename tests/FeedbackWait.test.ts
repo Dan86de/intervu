@@ -5,7 +5,7 @@ import { TestClock } from "effect/testing";
 import * as FeedbackWait from "../src/FeedbackWait.ts";
 import { Feedback } from "../src/Protocol.ts";
 import { SessionKey } from "../src/Session.ts";
-import { FeedbackQueued, SessionHub } from "../src/SessionHub.ts";
+import { FeedbackQueued, SessionEnded, SessionHub } from "../src/SessionHub.ts";
 import { SessionPersistence } from "../src/SessionPersistence.ts";
 import { SessionStore } from "../src/SessionStore.ts";
 
@@ -162,6 +162,60 @@ describe("FeedbackWait.wait", () => {
 
       yield* Fiber.interrupt(fiber);
       expect(yield* hub.presence(key)).toBe("idle");
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("returns ended immediately on an already-ended Session", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const session = yield* store.open("/tmp/ended.html");
+      yield* store.end(session.key);
+
+      // No fork: an already-ended Session settles on the first drain, no block.
+      const outcome = yield* Effect.scoped(FeedbackWait.wait(session.key));
+      expect(outcome.ended).toBe(true);
+      expect(outcome.timedOut).toBe(false);
+      expect(outcome.feedback).toHaveLength(0);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("ended carries the final feedback in one settle (Send & end)", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const session = yield* store.open("/tmp/sendend.html");
+
+      // The end handler commits the rider feedback and the status flip before any
+      // signal (ADR 0011), so one settle drains both - the store is the truth.
+      yield* store.queueFeedback(session.key, feedbackWith("final"));
+      yield* store.end(session.key);
+
+      const outcome = yield* Effect.scoped(FeedbackWait.wait(session.key));
+      expect(outcome.ended).toBe(true);
+      expect(outcome.feedback.map((feedback) => feedback.message)).toEqual([
+        "final",
+      ]);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("a waiting poll wakes on a plain end with no feedback", () =>
+    Effect.gen(function* () {
+      const hub = yield* SessionHub;
+      const store = yield* SessionStore;
+      const session = yield* store.open("/tmp/plainend.html");
+
+      const fiber = yield* FeedbackWait.wait(session.key).pipe(
+        Effect.forkChild,
+      );
+      yield* awaitSubscribed(session.key);
+
+      // A plain End: flip the status, then signal. The waiting poll re-settles,
+      // reads `ended`, and returns with no feedback.
+      yield* store.end(session.key);
+      yield* hub.publish(session.key, new SessionEnded());
+
+      const outcome = yield* Fiber.join(fiber);
+      expect(outcome.ended).toBe(true);
+      expect(outcome.feedback).toHaveLength(0);
     }).pipe(Effect.provide(testLayer)),
   );
 

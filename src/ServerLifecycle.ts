@@ -21,7 +21,7 @@ import {
   ReviewNotOpen,
   ServerStartTimeout,
 } from "./Errors.ts";
-import { Health, PollResponse } from "./Protocol.ts";
+import { EndResponse, Health, PollResponse } from "./Protocol.ts";
 import { Session } from "./Session.ts";
 
 type EnsureError =
@@ -31,6 +31,11 @@ type EnsureError =
   | Schema.SchemaError;
 
 type PollError =
+  | ReviewNotOpen
+  | HttpClientError.HttpClientError
+  | Schema.SchemaError;
+
+type EndError =
   | ReviewNotOpen
   | HttpClientError.HttpClientError
   | Schema.SchemaError;
@@ -60,6 +65,7 @@ export class ServerLifecycle extends Context.Service<
       timeoutSeconds: Option.Option<number>,
       agentReply: Option.Option<string>,
     ) => Effect.Effect<PollResponse, PollError>;
+    readonly end: (path: string) => Effect.Effect<EndResponse, EndError>;
   }
 >()("@intervu/ServerLifecycle") {
   static readonly layer = Layer.effect(
@@ -168,7 +174,24 @@ export class ServerLifecycle extends Context.Service<
           );
         });
 
-      return { ensure, requireHealthy, openSession, poll };
+      // End from the terminal (ADR 0011): the agent-facing thin client over
+      // `POST /end`. Path-addressed and lookup-without-create, so a `404` is a
+      // structured `ReviewNotOpen` - the daemon is up but nothing is open here.
+      const end = (path: string) =>
+        Effect.gen(function* () {
+          const request = HttpClientRequest.post(`${baseUrl}/end`).pipe(
+            HttpClientRequest.bodyJsonUnsafe({ path }),
+          );
+          const response = yield* client.execute(request);
+          if (response.status === 404) {
+            return yield* new ReviewNotOpen({ path });
+          }
+          return yield* HttpClientResponse.schemaBodyJson(EndResponse)(
+            response,
+          );
+        });
+
+      return { ensure, requireHealthy, openSession, poll, end };
     }),
   );
 }

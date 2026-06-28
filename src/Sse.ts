@@ -45,6 +45,15 @@ export const reloadFrame = (): string =>
   frame(JSON.stringify({ _tag: "ArtifactReloaded" }));
 
 /**
+ * The Session ended (ADR 0011 / 0012): the chrome swaps in the "Ended" pill,
+ * replaces the composer with the ended note, disables the Annotate and End
+ * controls, and closes its own `EventSource`. `id`-less: it is current-state
+ * (replayed fresh on connect to an already-ended Session), not a thread entry.
+ */
+export const endedFrame = (): string =>
+  frame(JSON.stringify({ _tag: "SessionEnded" }));
+
+/**
  * Map a live hub event to its SSE frame, or `None` for `FeedbackQueued` - the
  * poll's wake-signal, which the SSE route ignores so it never reaches the browser.
  */
@@ -58,6 +67,8 @@ export const liveFrame = (event: HubEvent): Option.Option<string> => {
       return Option.some(presenceFrame(event.presence));
     case "ArtifactReloaded":
       return Option.some(reloadFrame());
+    case "SessionEnded":
+      return Option.some(endedFrame());
   }
 };
 

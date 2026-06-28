@@ -99,6 +99,17 @@ export interface PollTimedOutView {
   readonly help: string;
 }
 
+/**
+ * The poll's ended document (ADR 0011): the Session closed. Carries any final
+ * feedback the human sent with Send & end (empty for a plain End), so the agent
+ * applies the last edit and stops in one poll.
+ */
+export interface PollEndedView {
+  readonly ended: true;
+  readonly feedback: readonly PollFeedbackView[];
+  readonly help: string;
+}
+
 const shapeAnnotation = (
   annotation: Annotation,
   index: number,
@@ -138,6 +149,32 @@ export const pollTimedOut = (params: {
   readonly help: string;
 }): PollTimedOutView => ({
   timedOut: true,
+  help: params.help,
+});
+
+/**
+ * Shape the poll's ended outcome (ADR 0011), pinning the canonical order
+ * (`ended`, `feedback`, then `help`) so the TOON render is stable. The agent
+ * applies any final feedback, sees `ended`, and stops.
+ */
+export const pollEnded = (params: {
+  readonly feedback: readonly Feedback[];
+  readonly help: string;
+}): PollEndedView => ({
+  ended: true,
+  feedback: params.feedback.map(shapeFeedback),
+  help: params.help,
+});
+
+/** A view for `intervu end <file>`: the Session is ended. */
+export interface EndedView {
+  readonly ended: true;
+  readonly help: string;
+}
+
+/** Shape the `intervu end` confirmation into its view. */
+export const ended = (params: { readonly help: string }): EndedView => ({
+  ended: true,
   help: params.help,
 });
 

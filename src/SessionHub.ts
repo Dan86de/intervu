@@ -50,12 +50,23 @@ export class PresenceChanged extends Schema.TaggedClass<PresenceChanged>(
   presence: Presence,
 }) {}
 
+/**
+ * The Session ended (ADR 0011 / 0012). A payload-free wake-signal: a waiting
+ * poll re-settles and reads the authoritative `ended` from `store.get(key)`,
+ * exactly as `FeedbackQueued` carries no feedback. Unlike `FeedbackQueued`, it
+ * *does* map to an SSE frame, so the chrome reacts to the ended state.
+ */
+export class SessionEnded extends Schema.TaggedClass<SessionEnded>(
+  "SessionEnded",
+)("SessionEnded", {}) {}
+
 /** Every signal the hub can carry, discriminated on `_tag`. */
 export const HubEvent = Schema.Union([
   FeedbackQueued,
   ConversationAppended,
   ArtifactReloaded,
   PresenceChanged,
+  SessionEnded,
 ]);
 export type HubEvent = typeof HubEvent.Type;
 

@@ -295,11 +295,44 @@ const postFeedback = (
     }),
   }).then((response) => response.ok);
 
+/** The Send & end / top-bar End feedback rider, serialized to the wire shape. */
+interface EndRider {
+  readonly message: string;
+  readonly annotations: readonly Annotation[];
+  readonly domSnapshot: string;
+}
+
 /**
- * Wire the composer: enable Send under the submit rule (a non-empty trimmed
- * message or at least one annotation), and on Send capture the snapshot, post the
- * Feedback, then clear on success or surface the failure while preserving the
- * message and annotations so the human can retry.
+ * End the Session over `POST /s/:key/end` (ADR 0011). A `null` rider is a plain
+ * End (top-bar control, empty body); a rider is Send & end, posting the final
+ * Feedback and the end in one atomic request. The ended UI is SSE-driven (the
+ * `SessionEnded` frame), so this only reports whether the request was accepted.
+ */
+const postEnd = (key: string, rider: EndRider | null): Promise<boolean> =>
+  fetch(`/s/${key}/end`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(
+      rider === null
+        ? {}
+        : {
+            feedback: {
+              message: rider.message,
+              annotations: rider.annotations.map(toWire),
+              domSnapshot: rider.domSnapshot,
+            },
+          },
+    ),
+  }).then((response) => response.ok);
+
+/**
+ * Wire the composer: enable Send and Send & end under the submit rule (a
+ * non-empty trimmed message or at least one annotation). Send captures the
+ * snapshot, posts the Feedback, then clears on success or surfaces the failure
+ * while preserving the message and annotations so the human can retry. Send & end
+ * posts the same Feedback as a rider to the end endpoint (ADR 0011), atomically
+ * delivering the final feedback and ending the Session; the ended UI itself is
+ * SSE-driven, so on success it simply leaves the composer for the frame to hide.
  */
 const createComposer = (
   iframe: HTMLIFrameElement,
@@ -308,28 +341,52 @@ const createComposer = (
 ): void => {
   const input = document.querySelector("[data-composer-input]");
   const send = document.querySelector("[data-send]");
+  const sendEndNode = document.querySelector("[data-send-end]");
   if (
     !(input instanceof HTMLTextAreaElement) ||
     !(send instanceof HTMLButtonElement)
   ) {
     return;
   }
-  const label = send.textContent ?? "Send to Agent";
+  const sendEnd = sendEndNode instanceof HTMLButtonElement ? sendEndNode : null;
+  const sendLabel = send.textContent ?? "Send to Agent";
+  const endLabel = sendEnd?.textContent ?? "Send & end";
 
   const isValid = (): boolean =>
     input.value.trim().length > 0 || pending.annotations().length > 0;
   const sync = (): void => {
-    send.disabled = !isValid();
+    const disabled = !isValid();
+    send.disabled = disabled;
+    if (sendEnd !== null) {
+      sendEnd.disabled = disabled;
+    }
   };
 
   const reset = (): void => {
-    send.textContent = label;
+    send.textContent = sendLabel;
+    if (sendEnd !== null) {
+      sendEnd.textContent = endLabel;
+    }
     sync();
   };
-  const fail = (): void => {
-    send.textContent = "Send failed";
-    send.disabled = true;
+  const fail = (button: HTMLButtonElement, text: string): void => {
+    button.textContent = text;
+    button.disabled = true;
     window.setTimeout(reset, 1600);
+  };
+
+  // Both actions need the live DOM the human annotated (ADR 0008); null if the
+  // frame is gone or the SDK is silent, which fails the action.
+  const captureRider = async (): Promise<EndRider | null> => {
+    const snapshot = await requestSnapshot(iframe).catch(() => null);
+    if (snapshot === null) {
+      return null;
+    }
+    return {
+      message: input.value,
+      annotations: pending.annotations(),
+      domSnapshot: snapshot,
+    };
   };
 
   const submit = async (): Promise<void> => {
@@ -337,20 +394,23 @@ const createComposer = (
       return;
     }
     send.disabled = true;
+    if (sendEnd !== null) {
+      sendEnd.disabled = true;
+    }
     send.textContent = "Sending...";
-    const snapshot = await requestSnapshot(iframe).catch(() => null);
-    if (snapshot === null) {
-      fail();
+    const rider = await captureRider();
+    if (rider === null) {
+      fail(send, "Send failed");
       return;
     }
     const ok = await postFeedback(
       config.key,
-      input.value,
-      pending.annotations(),
-      snapshot,
+      rider.message,
+      rider.annotations,
+      rider.domSnapshot,
     ).catch(() => false);
     if (!ok) {
-      fail();
+      fail(send, "Send failed");
       return;
     }
     input.value = "";
@@ -358,13 +418,39 @@ const createComposer = (
     reset();
   };
 
+  const submitEnd = async (): Promise<void> => {
+    if (sendEnd === null || !isValid()) {
+      return;
+    }
+    send.disabled = true;
+    sendEnd.disabled = true;
+    sendEnd.textContent = "Ending...";
+    const rider = await captureRider();
+    if (rider === null) {
+      fail(sendEnd, "End failed");
+      return;
+    }
+    const ok = await postEnd(config.key, rider).catch(() => false);
+    if (!ok) {
+      fail(sendEnd, "End failed");
+      return;
+    }
+    // Success: the `SessionEnded` SSE frame hides the composer and disables the
+    // controls, so there is nothing to clear here.
+  };
+
   input.addEventListener("input", sync);
   pending.onChange(sync);
-  // `submit` resolves on its own (every await has a `.catch`), so letting the
-  // returned promise settle untracked is safe here.
+  // `submit`/`submitEnd` resolve on their own (every await has a `.catch`), so
+  // letting the returned promise settle untracked is safe here.
   send.addEventListener("click", () => {
     submit();
   });
+  if (sendEnd !== null) {
+    sendEnd.addEventListener("click", () => {
+      submitEnd();
+    });
+  }
   sync();
 };
 
@@ -517,11 +603,64 @@ const wireLiveReload = (
 };
 
 /**
+ * Apply the ended state (ADR 0011), driven by the `SessionEnded` SSE frame and
+ * idempotent so the replay-on-connect and a live end converge: swap the presence
+ * indicator for the "Ended" pill in the same region, replace the composer with
+ * the muted ended note, and disable the Annotate and End controls. The artifact
+ * iframe stays visible and frozen - no further annotations can be captured.
+ */
+const applyEnded = (): void => {
+  document.querySelector("[data-presence]")?.classList.add("hidden");
+  const pill = document.querySelector("[data-ended-pill]");
+  if (pill instanceof HTMLElement) {
+    pill.classList.remove("hidden");
+    pill.classList.add("inline-flex");
+  }
+  document.querySelector("[data-composer]")?.classList.add("hidden");
+  document.querySelector("[data-ended-note]")?.classList.remove("hidden");
+  for (const selector of [
+    "[data-annotate-toggle]",
+    "[data-end-session]",
+    "[data-send]",
+    "[data-send-end]",
+  ]) {
+    const control = document.querySelector(selector);
+    if (control instanceof HTMLButtonElement) {
+      control.disabled = true;
+    }
+  }
+};
+
+/**
+ * Wire the top-bar End session control (ADR 0011): a plain End with no rider,
+ * available until the Session ends. The ended UI is SSE-driven, so this only
+ * POSTs and re-enables on failure - the `SessionEnded` frame does the rest.
+ */
+const wireEndSession = (config: ChromeConfig): void => {
+  const button = document.querySelector("[data-end-session]");
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    postEnd(config.key, null)
+      .catch(() => false)
+      .then((ok) => {
+        if (!ok) {
+          button.disabled = false;
+        }
+      });
+  });
+};
+
+/**
  * Open the one server-to-browser SSE channel (ADR 0010) and fan its frames out to
- * the indicator, the thread, and the iframe reload. `EventSource` reconnects
- * transparently and resumes the thread from `Last-Event-ID`, so a dropped
- * connection never duplicates a bubble. Every frame is untrusted JSON, validated
- * before it touches the DOM.
+ * the indicator, the thread, the iframe reload, and the ended state. `EventSource`
+ * reconnects transparently and resumes the thread from `Last-Event-ID`, so a
+ * dropped connection never duplicates a bubble. On a `SessionEnded` frame the
+ * chrome applies the ended state and closes its own `EventSource`, which tears
+ * down the server stream via the existing client-disconnect path (ADR 0011).
+ * Every frame is untrusted JSON, validated before it touches the DOM.
  */
 const createLiveChannel = (
   config: ChromeConfig,
@@ -529,6 +668,7 @@ const createLiveChannel = (
     readonly setPresence: (presence: Presence) => void;
     readonly appendConversation: (entry: ConversationEntry) => void;
     readonly reload: () => void;
+    readonly ended: () => void;
   },
 ): void => {
   const source = new EventSource(`/s/${config.key}/events`);
@@ -555,6 +695,9 @@ const createLiveChannel = (
       handlers.appendConversation(data);
     } else if (data._tag === "ArtifactReloaded") {
       handlers.reload();
+    } else if (data._tag === "SessionEnded") {
+      handlers.ended();
+      source.close();
     }
   });
 };
@@ -568,6 +711,7 @@ const main = (): void => {
   wireCopy("[data-copy-source]", () =>
     fetch(config.sourceUrl).then((response) => response.text()),
   );
+  wireEndSession(config);
   const iframe = document.querySelector("[data-artifact]");
   if (iframe instanceof HTMLIFrameElement) {
     wireToggle(iframe);
@@ -578,6 +722,7 @@ const main = (): void => {
       setPresence: wirePresence(),
       appendConversation: createConversation(),
       reload,
+      ended: applyEnded,
     });
   }
 };

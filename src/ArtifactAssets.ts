@@ -154,20 +154,30 @@ const composerInputClass =
 
 /** The primary "Send to Agent" action, disabled until the submit rule passes. */
 const sendButtonClass =
-  "mt-2 w-full cursor-pointer rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-default disabled:opacity-50";
+  "flex-1 cursor-pointer rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-default disabled:opacity-50";
+
+/**
+ * The secondary "Send & end" action beside Send: posts a final Feedback and ends
+ * the Session in one atomic step (ADR 0011), gated by the same submit rule.
+ */
+const sendEndButtonClass =
+  "flex-1 cursor-pointer rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold hover:bg-accent disabled:cursor-default disabled:opacity-50";
 
 /**
  * Render the chrome page for a session (ADR 0004): a slim Tailwind/shadcn top bar
- * - filename, a Presence indicator (dot + label), the Annotate-mode toggle, and
- * the two working-copy controls - over a stage pairing the artifact's sandboxed,
+ * - filename, a Presence indicator (dot + label) with a hidden "Ended" pill in
+ * the same region, the Annotate-mode toggle, the two working-copy controls, and
+ * an End session control - over a stage pairing the artifact's sandboxed,
  * opaque-origin iframe (ADR 0003) with a conversation panel. Behaviour lives in
  * the built controller at `/chrome.js`, fed the session's paths through the
  * inline JSON config; styling is the build-time Tailwind output at `/chrome.css`.
  * The iframe `src` is `/s/:key/a/`, so the artifact's relative URLs resolve under
  * that prefix with no `<base>` tag and no URL rewriting. The panel renders the
  * Conversation thread (replayed then appended live over the SSE stream; ADR 0010)
- * above a composer (message + Send to Agent) pinned to its bottom. The Presence
- * dot is authored at its idle color statically; `chrome.js` swaps the live colors.
+ * above a composer (message + Send to Agent + Send & end) pinned to its bottom,
+ * with a hidden ended note that replaces the composer once the Session ends. The
+ * Presence dot is authored at its idle color statically; `chrome.js` swaps the
+ * live colors and drives the ended state from the `SessionEnded` SSE frame.
  */
 export const renderChrome = (params: ChromeParams): string => {
   const safeFilename = escapeHtml(params.filename);
@@ -194,10 +204,12 @@ export const renderChrome = (params: ChromeParams): string => {
         <span class="h-2 w-2 rounded-full bg-zinc-400" data-presence-dot></span>
         <span class="text-xs text-muted-foreground" data-presence-label>idle</span>
       </span>
+      <span class="hidden flex-none items-center rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-muted-foreground" data-ended-pill>Ended</span>
       <div class="ml-auto flex gap-2">
         <button type="button" class="${buttonClass} aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground" data-annotate-toggle aria-pressed="false">Annotate</button>
         <button type="button" class="${buttonClass}" data-copy-path>Copy path</button>
         <button type="button" class="${buttonClass}" data-copy-source>Copy source</button>
+        <button type="button" class="${buttonClass}" data-end-session>End session</button>
       </div>
     </header>
     <main class="flex min-h-0 flex-1">
@@ -217,9 +229,15 @@ export const renderChrome = (params: ChromeParams): string => {
           <p class="m-0 text-[13px] leading-relaxed text-muted-foreground" data-conversation-empty>No messages yet. Your feedback and the agent's replies will appear here.</p>
           <div class="mt-3 flex flex-col gap-2" data-conversation></div>
         </div>
-        <div class="flex-none border-t border-border p-3" data-composer>
-          <textarea class="${composerInputClass}" data-composer-input rows="3" placeholder="Message to the agent..." aria-label="Message to the agent"></textarea>
-          <button type="button" class="${sendButtonClass}" data-send disabled>Send to Agent</button>
+        <div class="flex-none border-t border-border p-3">
+          <div data-composer>
+            <textarea class="${composerInputClass}" data-composer-input rows="3" placeholder="Message to the agent..." aria-label="Message to the agent"></textarea>
+            <div class="mt-2 flex gap-2">
+              <button type="button" class="${sendButtonClass}" data-send disabled>Send to Agent</button>
+              <button type="button" class="${sendEndButtonClass}" data-send-end disabled>Send &amp; end</button>
+            </div>
+          </div>
+          <p class="m-0 hidden text-[13px] italic leading-relaxed text-muted-foreground" data-ended-note>This review has ended.</p>
         </div>
       </aside>
     </main>

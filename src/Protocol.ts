@@ -124,12 +124,40 @@ export const Presence = Schema.Literals(["idle", "listening", "working"]);
 export type Presence = typeof Presence.Type;
 
 /**
- * `POST /poll` response body: either the drained feedback (`timedOut: false`,
- * one or more Feedback) or, only when the request set a timeout, the expiry
- * marker (`timedOut: true`, empty feedback). The CLI shapes the TOON the agent
- * sees from this.
+ * `POST /poll` response body (ADR 0009 / 0011): the drained feedback (possibly
+ * empty), whether the bounded timeout fired, and whether the Session ended.
+ * `ended` may co-occur with a non-empty `feedback` - a Send & end settles one
+ * poll with the final feedback *and* the ended signal. The CLI shapes the TOON
+ * the agent sees from this.
  */
 export class PollResponse extends Schema.Class<PollResponse>("PollResponse")({
   timedOut: Schema.Boolean,
+  ended: Schema.Boolean,
   feedback: Schema.Array(Feedback),
+}) {}
+
+/**
+ * `POST /end` request body (CLI, path-addressed): the artifact's resolved
+ * realpath, looked up without creating - an unopened path is `ReviewNotOpen`.
+ * The agent-facing end carries no final-feedback rider (that is chrome-only).
+ */
+export class EndRequest extends Schema.Class<EndRequest>("EndRequest")({
+  path: Schema.String,
+}) {}
+
+/**
+ * `POST /s/:key/end` request body (chrome, key-addressed): an optional final
+ * feedback rider (ADR 0011). Absent is a plain End (top-bar control); present is
+ * Send & end, where the handler queues the `ValidFeedback` and flips the status
+ * before signalling, so a waiting poll drains it and reads `ended` in one settle.
+ */
+export class EndRiderRequest extends Schema.Class<EndRiderRequest>(
+  "EndRiderRequest",
+)({
+  feedback: Schema.optional(ValidFeedback),
+}) {}
+
+/** `POST /end` and `POST /s/:key/end` response body: the Session is ended. */
+export class EndResponse extends Schema.Class<EndResponse>("EndResponse")({
+  ended: Schema.Boolean,
 }) {}

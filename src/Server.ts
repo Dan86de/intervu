@@ -19,6 +19,9 @@ import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import * as FeedbackWait from "./FeedbackWait.ts";
 import {
+  EndRequest,
+  EndResponse,
+  EndRiderRequest,
   OpenSessionRequest,
   PollRequest,
   PollResponse,
@@ -28,6 +31,7 @@ import { type Session, SessionKey } from "./Session.ts";
 import {
   ConversationAppended,
   FeedbackQueued,
+  SessionEnded,
   SessionHub,
 } from "./SessionHub.ts";
 import { SessionStore } from "./SessionStore.ts";
@@ -204,12 +208,19 @@ const sourceRoute = HttpRouter.add(
  * `FeedbackQueued` stays payload-free (the poll's wake-signal; ADR 0009) and the
  * thread frame carries the entry. `annotationCount` lets the chrome render an
  * annotation-only Feedback (empty message) as a count, not a blank bubble.
+ *
+ * Feedback to an `ended` Session is rejected with `409` (defense-in-depth; the
+ * chrome already removes the composer on end, so this only fires on a stale or
+ * crafted request), so the queue never holds feedback for a closed review.
  */
 const feedbackRoute = HttpRouter.add(
   "POST",
   "/s/:key/feedback",
   withSession((session) =>
     Effect.gen(function* () {
+      if (session.status === "ended") {
+        return HttpServerResponse.empty({ status: 409 });
+      }
       const store = yield* SessionStore;
       const hub = yield* SessionHub;
       const feedback = yield* HttpServerRequest.schemaBodyJson(ValidFeedback);
@@ -244,6 +255,10 @@ const feedbackRoute = HttpRouter.add(
  * wait begins, so the reply reaches the chrome over the SSE stream immediately -
  * not on this response, which stays held open for minutes. A blank or absent
  * reply is a no-op and just polls.
+ *
+ * The settle now has three reasons (ADR 0011): drained feedback, `timedOut`, or
+ * the Session `ended` (which may carry a final feedback in the same response when
+ * the human used Send & end). A poll on an already-`ended` Session returns at once.
  */
 const pollRoute = HttpRouter.add(
   "POST",
@@ -282,6 +297,7 @@ const pollRoute = HttpRouter.add(
             return yield* HttpServerResponse.schemaJson(PollResponse)(
               new PollResponse({
                 timedOut: outcome.timedOut,
+                ended: outcome.ended,
                 feedback: outcome.feedback,
               }),
             );
@@ -291,6 +307,105 @@ const pollRoute = HttpRouter.add(
   }).pipe(
     Effect.catch((error) =>
       Effect.logError("POST /poll failed", error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 500 })),
+      ),
+    ),
+  ),
+);
+
+/**
+ * The single End core behind both end routes (ADR 0011 / 0012). It applies the
+ * optional final-feedback rider and the status flip to the store *before*
+ * publishing `SessionEnded`, so a waiting poll drains the feedback and reads
+ * `ended` in one settle (the store, not the signal, is the source of truth). A
+ * rider also appends the human's message to the Conversation and publishes a
+ * `ConversationAppended` first, so the chrome renders the final bubble before it
+ * reacts to the ended frame (SSE frames are ordered on the one connection).
+ *
+ * Ending an already-`ended` Session is an idempotent no-op: the rider is dropped
+ * (feedback to a closed review is rejected) and no `SessionEnded` is re-emitted -
+ * a poll on an already-ended Session has long since returned `ended`.
+ */
+const endSession = (
+  session: Session,
+  rider: Option.Option<typeof ValidFeedback.Type>,
+) =>
+  Effect.gen(function* () {
+    if (session.status === "ended") {
+      return;
+    }
+    const store = yield* SessionStore;
+    const hub = yield* SessionHub;
+    yield* Option.match(rider, {
+      onNone: () => Effect.void,
+      onSome: (feedback) =>
+        Effect.gen(function* () {
+          yield* store.queueFeedback(session.key, feedback);
+          const entry = yield* store.appendConversation(session.key, {
+            role: "human",
+            text: feedback.message,
+            annotationCount: feedback.annotations.length,
+          });
+          yield* hub.publish(session.key, new ConversationAppended({ entry }));
+        }),
+    });
+    yield* store.end(session.key);
+    yield* hub.publish(session.key, new SessionEnded());
+  });
+
+const endedResponse = (): HttpServerResponse.HttpServerResponse =>
+  HttpServerResponse.jsonUnsafe(new EndResponse({ ended: true }));
+
+/**
+ * The chrome's End target (ADR 0011): key-addressed with an optional
+ * `ValidFeedback` rider. An empty/absent rider is a plain End (top-bar control);
+ * a present rider is Send & end. A malformed rider is a `400`; the status flip
+ * itself is idempotent, so the response is always the ended marker.
+ */
+const endChromeRoute = HttpRouter.add(
+  "POST",
+  "/s/:key/end",
+  withSession((session) =>
+    Effect.gen(function* () {
+      const body = yield* HttpServerRequest.schemaBodyJson(EndRiderRequest);
+      yield* endSession(session, Option.fromNullishOr(body.feedback));
+      return endedResponse();
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("POST /s/:key/end rejected", error).pipe(
+          Effect.as(HttpServerResponse.empty({ status: 400 })),
+        ),
+      ),
+    ),
+  ),
+);
+
+/**
+ * The agent's End (ADR 0011 / 0012): path-addressed and lookup-without-create,
+ * mirroring `poll`, so an unopened path is a structured `404` (`ReviewNotOpen`)
+ * rather than a silent spawn. No final-feedback rider - the terminal end is plain.
+ */
+const endRoute = HttpRouter.add(
+  "POST",
+  "/end",
+  Effect.gen(function* () {
+    const store = yield* SessionStore;
+    const request = yield* HttpServerRequest.schemaBodyJson(EndRequest);
+    const session = yield* store.getByPath(request.path);
+    return yield* Option.match(session, {
+      onNone: () =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { _tag: "ReviewNotOpen", path: request.path },
+            { status: 404 },
+          ),
+        ),
+      onSome: (open) =>
+        endSession(open, Option.none()).pipe(Effect.as(endedResponse())),
+    });
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logError("POST /end failed", error).pipe(
         Effect.as(HttpServerResponse.empty({ status: 500 })),
       ),
     ),
@@ -333,9 +448,18 @@ const eventsRoute = HttpRouter.add(
 
           const replay = yield* store.conversationSince(session.key, afterSeq);
           const presence = yield* hub.presence(session.key);
+          // Subscribe-then-check (mirror of the poll): read the status after
+          // subscribing, so a connect to an already-`ended` Session replays the
+          // ended frame, while an end that races the connect arrives live.
+          const current = yield* store.get(session.key);
+          const ended = Option.match(current, {
+            onNone: () => false,
+            onSome: (s) => s.status === "ended",
+          });
           const initial = Stream.fromIterable([
             ...replay.map(Sse.conversationFrame),
             Sse.presenceFrame(presence),
+            ...(ended ? [Sse.endedFrame()] : []),
           ]);
           const live = Stream.fromSubscription(subscription).pipe(
             Stream.filterMap(Filter.fromPredicateOption(Sse.liveFrame)),
@@ -411,6 +535,8 @@ export const layer = HttpRouter.serve(
     sourceRoute,
     feedbackRoute,
     pollRoute,
+    endChromeRoute,
+    endRoute,
     eventsRoute,
     sdkRoute,
     chromeScriptRoute,

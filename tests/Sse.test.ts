@@ -6,6 +6,7 @@ import {
   ConversationAppended,
   FeedbackQueued,
   PresenceChanged,
+  SessionEnded,
 } from "../src/SessionHub.ts";
 import * as Sse from "../src/Sse.ts";
 
@@ -46,12 +47,15 @@ describe("Sse", () => {
     expect(frame).toContain("line one\\nline two");
   });
 
-  it("frames presence and reload without an id (not replayable)", () => {
+  it("frames presence, reload, and ended without an id (not replayable)", () => {
     expect(Sse.presenceFrame("working")).toBe(
       `data: ${JSON.stringify({ _tag: "PresenceChanged", presence: "working" })}\n\n`,
     );
     expect(Sse.reloadFrame()).toBe(
       `data: ${JSON.stringify({ _tag: "ArtifactReloaded" })}\n\n`,
+    );
+    expect(Sse.endedFrame()).toBe(
+      `data: ${JSON.stringify({ _tag: "SessionEnded" })}\n\n`,
     );
     expect(Sse.PING_FRAME).toBe(": ping\n\n");
   });
@@ -66,6 +70,10 @@ describe("Sse", () => {
     ).toStrictEqual(Option.some(Sse.presenceFrame("listening")));
     expect(Sse.liveFrame(new ArtifactReloaded())).toStrictEqual(
       Option.some(Sse.reloadFrame()),
+    );
+    // Unlike FeedbackQueued, SessionEnded does reach the browser (ADR 0011).
+    expect(Sse.liveFrame(new SessionEnded())).toStrictEqual(
+      Option.some(Sse.endedFrame()),
     );
   });
 

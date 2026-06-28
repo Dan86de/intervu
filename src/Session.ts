@@ -9,8 +9,9 @@ export const SessionKey = Schema.String.pipe(Schema.brand("SessionKey"));
 export type SessionKey = typeof SessionKey.Type;
 
 /**
- * A Session's lifecycle status. Only `open` is produced this slice; `ended`
- * arrives with the close flow (CONTEXT.md: `open` -> ... -> `ended`).
+ * A Session's lifecycle status. `open` on a created or resumed Session; `ended`
+ * once the human or the agent ends it (`SessionStore.end`). The transition is
+ * reversible (ADR 0012): re-opening an `ended` path resurrects it to `open`.
  */
 export const SessionStatus = Schema.Literals(["open", "ended"]);
 export type SessionStatus = typeof SessionStatus.Type;

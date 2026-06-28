@@ -139,6 +139,21 @@ describe("ArtifactAssets.renderChrome", () => {
     expect(chrome).toContain("data-send disabled");
   });
 
+  it("renders the End controls and the ended state, initially hidden", () => {
+    // The top-bar End session control (plain end, always available) and the
+    // composer's Send & end, both starting disabled like Send.
+    expect(chrome).toContain("data-end-session");
+    expect(chrome).toContain(">End session<");
+    expect(chrome).toContain("data-send-end");
+    expect(chrome).toContain("Send &amp; end");
+    expect(chrome).toContain("data-send-end disabled");
+    // The ended-state UI is present but hidden until the SessionEnded frame.
+    expect(chrome).toContain("data-ended-pill");
+    expect(chrome).toContain(">Ended<");
+    expect(chrome).toContain("data-ended-note");
+    expect(chrome).toContain("This review has ended.");
+  });
+
   it("links the build-time chrome stylesheet and controller", () => {
     expect(chrome).toContain('<link rel="stylesheet" href="/chrome.css" />');
     expect(chrome).toContain('<script src="/chrome.js"></script>');
