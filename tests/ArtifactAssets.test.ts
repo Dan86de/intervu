@@ -119,13 +119,24 @@ describe("ArtifactAssets.renderChrome", () => {
     expect(chrome).not.toContain("allow-top-navigation");
   });
 
-  it("renders an honest shell: copy controls wired, no message input", () => {
+  it("wires the copy controls and relabels the source control", () => {
     expect(chrome).toContain("data-copy-path");
-    expect(chrome).toContain("data-copy-snapshot");
+    expect(chrome).toContain("data-copy-source");
+    expect(chrome).toContain(">Copy source<");
     expect(chrome).toContain("/s/abc123def4567890/source");
-    expect(chrome).not.toContain("Send");
-    expect(chrome).not.toContain("<input");
-    expect(chrome).not.toContain("<textarea");
+    // The "Copy DOM snapshot" label is freed for the live-DOM term (ADR 0008).
+    expect(chrome).not.toContain("data-copy-snapshot");
+    expect(chrome).not.toContain("Copy DOM snapshot");
+  });
+
+  it("renders the composer with a gated Send control", () => {
+    expect(chrome).toContain("data-composer");
+    expect(chrome).toContain("data-composer-input");
+    expect(chrome).toContain("<textarea");
+    expect(chrome).toContain("data-send");
+    expect(chrome).toContain(">Send to Agent<");
+    // Send starts disabled until the submit rule passes.
+    expect(chrome).toContain("data-send disabled");
   });
 
   it("links the build-time chrome stylesheet and controller", () => {

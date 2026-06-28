@@ -1,9 +1,13 @@
 import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
+import { Feedback } from "../src/Protocol.ts";
 import { Session, SessionKey } from "../src/Session.ts";
 import { SessionPersistence } from "../src/SessionPersistence.ts";
 import { SessionStore } from "../src/SessionStore.ts";
+
+const feedbackWith = (message: string): Feedback =>
+  new Feedback({ message, annotations: [], domSnapshot: "<html></html>" });
 
 /**
  * SessionStore exercised against the in-memory `SessionPersistence` layer, with
@@ -73,6 +77,65 @@ describe("SessionStore", () => {
 
       expect(persisted).toHaveLength(1);
       expect(persisted[0]?.key).toBe(session.key);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect(
+    "queueFeedback then takeFeedback drains in order, exactly once",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* SessionStore;
+        const session = yield* store.open("/tmp/a.html");
+
+        yield* store.queueFeedback(session.key, feedbackWith("first"));
+        yield* store.queueFeedback(session.key, feedbackWith("second"));
+
+        const drained = yield* store.takeFeedback(session.key);
+        expect(drained.map((feedback) => feedback.message)).toEqual([
+          "first",
+          "second",
+        ]);
+
+        // Take-once: a second take after a drain is the definitive empty state.
+        const again = yield* store.takeFeedback(session.key);
+        expect(again).toHaveLength(0);
+      }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("takeFeedback on a never-queued key is empty, not an error", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const session = yield* store.open("/tmp/a.html");
+
+      const drained = yield* store.takeFeedback(session.key);
+      expect(drained).toHaveLength(0);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("re-opening a path preserves its queued feedback", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const first = yield* store.open("/tmp/a.html");
+      yield* store.queueFeedback(first.key, feedbackWith("queued"));
+
+      // The idempotent reopen must not drop the in-flight queue.
+      yield* store.open("/tmp/a.html");
+
+      const drained = yield* store.takeFeedback(first.key);
+      expect(drained.map((feedback) => feedback.message)).toEqual(["queued"]);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("getByPath resolves the same Session as the derived key", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const opened = yield* store.open("/tmp/a.html");
+
+      const found = yield* store.getByPath("/tmp/a.html");
+      expect(Option.getOrUndefined(found)?.key).toBe(opened.key);
+
+      const missing = yield* store.getByPath("/tmp/never.html");
+      expect(Option.isSome(missing)).toBe(false);
     }).pipe(Effect.provide(storeLayer())),
   );
 

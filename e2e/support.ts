@@ -16,7 +16,7 @@ import {
  */
 
 /** The absolute path of the committed fixture, the artifact under review. */
-const fixturePath = new URL("./fixtures/artifact.html", import.meta.url)
+export const fixturePath = new URL("./fixtures/artifact.html", import.meta.url)
   .pathname;
 
 /** The in-iframe SDK marks `<html>` with its current Annotate-mode. */

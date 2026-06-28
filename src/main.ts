@@ -1,6 +1,6 @@
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun";
 import { Console, Effect, FileSystem, Layer } from "effect";
-import { Argument, Command } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import { AppConfig, version } from "./AppConfig.ts";
 import * as Browser from "./Browser.ts";
@@ -9,6 +9,7 @@ import { ArtifactNotFound, DaemonNotRunning } from "./Errors.ts";
 import * as Output from "./Output.ts";
 import * as Server from "./Server.ts";
 import { ServerLifecycle } from "./ServerLifecycle.ts";
+import { SessionHub } from "./SessionHub.ts";
 import { SessionPersistence } from "./SessionPersistence.ts";
 import { SessionStore } from "./SessionStore.ts";
 import * as Toon from "./Toon.ts";
@@ -66,6 +67,47 @@ const open = Command.make("open", { file: Argument.file("file") }, ({ file }) =>
     });
     yield* emit(yield* Toon.encode(view));
   }),
+);
+
+/**
+ * `intervu poll <file>` (ADR 0009): the agent's long-poll. Resolve the
+ * artifact's realpath, require an already-running daemon (no spawn), then hold a
+ * single request open until the human sends - printing the drained Feedback as
+ * TOON. `--timeout <seconds>` bounds the wait and prints `timedOut: true`
+ * instead. Killing and re-running is safe: queued Feedback survives.
+ */
+const poll = Command.make(
+  "poll",
+  {
+    file: Argument.file("file"),
+    timeout: Flag.optional(Flag.integer("timeout")).pipe(
+      Flag.withDescription(
+        "seconds to wait before returning timedOut (default: wait indefinitely)",
+      ),
+    ),
+  },
+  ({ file, timeout }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const lifecycle = yield* ServerLifecycle;
+
+      const realPath = yield* fs
+        .realPath(file)
+        .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+
+      yield* lifecycle.requireHealthy;
+      const response = yield* lifecycle.poll(realPath, timeout);
+
+      const view = response.timedOut
+        ? Output.pollTimedOut({
+            help: `no feedback within the timeout - run 'intervu poll ${file}' to keep listening`,
+          })
+        : Output.pollFeedback({
+            feedback: response.feedback,
+            help: `feedback received - edit the artifact, then 'intervu poll ${file}' to listen again`,
+          });
+      yield* emit(yield* Toon.encode(view));
+    }),
 );
 
 /**
@@ -132,14 +174,14 @@ const stop = Command.make("stop", {}, () =>
   }),
 );
 
-const cli = root.pipe(Command.withSubcommands([open, server, stop]));
+const cli = root.pipe(Command.withSubcommands([open, poll, server, stop]));
 
 /**
  * Bare `intervu <file>` aliases `intervu open <file>`. The CLI framework can't
  * mix a root positional argument with subcommands, so an unrecognized leading
  * token that isn't a flag is rewritten to `open <file>` before parsing.
  */
-const knownSubcommands = new Set(["open", "server", "stop"]);
+const knownSubcommands = new Set(["open", "poll", "server", "stop"]);
 const rawArgs = process.argv.slice(2);
 const firstArg = rawArgs[0];
 const args =
@@ -151,7 +193,11 @@ const args =
 
 const PlatformLayer = Layer.mergeAll(BunServices.layer, FetchHttpClient.layer);
 
-const AppLayer = Layer.mergeAll(SessionStore.layer, ServerLifecycle.layer).pipe(
+const AppLayer = Layer.mergeAll(
+  SessionStore.layer,
+  SessionHub.layer,
+  ServerLifecycle.layer,
+).pipe(
   Layer.provideMerge(SessionPersistence.fileLayer),
   Layer.provideMerge(AppConfig.layer),
   Layer.provideMerge(PlatformLayer),

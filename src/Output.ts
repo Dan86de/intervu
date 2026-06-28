@@ -1,3 +1,5 @@
+import type { Annotation, Feedback } from "./Protocol.ts";
+
 /**
  * Pure output shaping for intervu's CLI.
  *
@@ -58,6 +60,84 @@ export const session = (params: SessionView): SessionView => ({
   key: params.key,
   path: params.path,
   status: params.status,
+  help: params.help,
+});
+
+/**
+ * One annotation as the poll prints it: `n` is the 1-based badge number the
+ * human saw, then the selector context. `selectedText` is present only on the
+ * `text` kind, so the key is omitted entirely for an `element` annotation.
+ */
+export interface PollAnnotationView {
+  readonly n: number;
+  readonly kind: string;
+  readonly selector: string;
+  readonly tag: string;
+  readonly text: string;
+  readonly selectedText?: string;
+}
+
+/**
+ * One drained Feedback: the human's message, its numbered annotations, and the
+ * DOM snapshot last (it is the bulky field, kept out of the way).
+ */
+export interface PollFeedbackView {
+  readonly message: string;
+  readonly annotations: readonly PollAnnotationView[];
+  readonly domSnapshot: string;
+}
+
+/** The poll's feedback document: the drained collection plus a next-step line. */
+export interface PollView {
+  readonly feedback: readonly PollFeedbackView[];
+  readonly help: string;
+}
+
+/** The poll's distinct expiry document, emitted only when `--timeout` is set. */
+export interface PollTimedOutView {
+  readonly timedOut: true;
+  readonly help: string;
+}
+
+const shapeAnnotation = (
+  annotation: Annotation,
+  index: number,
+): PollAnnotationView => {
+  const base = {
+    n: index + 1,
+    kind: annotation.kind,
+    selector: annotation.selector,
+    tag: annotation.tag,
+    text: annotation.text,
+  };
+  return annotation.kind === "text"
+    ? { ...base, selectedText: annotation.selectedText }
+    : base;
+};
+
+const shapeFeedback = (feedback: Feedback): PollFeedbackView => ({
+  message: feedback.message,
+  annotations: feedback.annotations.map(shapeAnnotation),
+  domSnapshot: feedback.domSnapshot,
+});
+
+/**
+ * Shape the poll's drained feedback into its view, pinning the canonical order
+ * (`feedback`, then `help`) so the TOON render is stable.
+ */
+export const pollFeedback = (params: {
+  readonly feedback: readonly Feedback[];
+  readonly help: string;
+}): PollView => ({
+  feedback: params.feedback.map(shapeFeedback),
+  help: params.help,
+});
+
+/** Shape the poll's bounded-timeout expiry into its distinct view. */
+export const pollTimedOut = (params: {
+  readonly help: string;
+}): PollTimedOutView => ({
+  timedOut: true,
   help: params.help,
 });
 

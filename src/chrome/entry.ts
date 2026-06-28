@@ -2,14 +2,17 @@ import { onMessageFromFrame, postToFrame } from "../sdk/bridge.ts";
 import type { AnnotateMode, Annotation } from "../sdk/protocol.ts";
 
 /**
- * The chrome controller (CONTEXT.md "Chrome"; ADR 0004 / 0006), served at
+ * The chrome controller (CONTEXT.md "Chrome"; ADR 0004 / 0006 / 0008), served at
  * `/chrome.js` and loaded by the chrome page that wraps the artifact iframe.
  * Plain DOM TypeScript, no Effect. It owns the top-bar controls and the
  * Annotate-mode toggle (which flips its pressed state and tells the in-iframe SDK
- * over the Bridge), and the "Pending annotations" panel: each `annotation-added`
- * from the iframe appends a numbered row, and removing a row sends
- * `annotation-removed` back so the SDK clears the matching marker. Stacked
- * annotations are renumbered to stay in step with the in-artifact badges.
+ * over the Bridge), the "Pending annotations" panel (each `annotation-added`
+ * appends a numbered row; removing a row sends `annotation-removed` back so the
+ * SDK clears its marker), and the composer: at Send it requests a live DOM
+ * snapshot over the Bridge, posts the message-plus-annotations Feedback to the
+ * daemon, and on success clears the composer, the rows, and the in-artifact
+ * markers - preserving them on failure. Stacked annotations renumber to stay in
+ * step with the in-artifact badges.
  */
 
 interface ChromeConfig {
@@ -134,11 +137,35 @@ const buildRow = (
   return row;
 };
 
-const wirePending = (iframe: HTMLIFrameElement): void => {
+/**
+ * The stacked annotations the human has captured but not yet sent. Owns both the
+ * model (insertion-ordered, the order the badges show and the poll's `n` mirror)
+ * and its panel rendering; `annotations()` is what Send serializes, and `clear()`
+ * drops the rows and clears every in-artifact marker after a successful send.
+ */
+interface Pending {
+  readonly annotations: () => readonly Annotation[];
+  readonly clear: () => void;
+  readonly onChange: (listener: () => void) => void;
+}
+
+const createPending = (iframe: HTMLIFrameElement): Pending => {
   const list = document.querySelector("[data-pending-list]");
   const empty = document.querySelector("[data-pending-empty]");
+  const items = new Map<string, Annotation>();
+  const listeners: Array<() => void> = [];
+  const notify = (): void => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+
   if (!(list instanceof HTMLUListElement) || !(empty instanceof HTMLElement)) {
-    return;
+    return {
+      annotations: () => [],
+      clear: () => {},
+      onChange: (listener) => listeners.push(listener),
+    };
   }
 
   const renumber = (): void => {
@@ -153,18 +180,23 @@ const wirePending = (iframe: HTMLIFrameElement): void => {
     empty.classList.toggle("hidden", hasRows);
   };
 
-  const removeAnnotation = (id: string): void => {
-    const row = list.querySelector(`[data-pending-id="${CSS.escape(id)}"]`);
-    if (row === null) {
-      return;
-    }
-    row.remove();
-    renumber();
-    syncEmpty();
+  const clearMarker = (id: string): void => {
     const frame = iframe.contentWindow;
     if (frame !== null) {
       postToFrame(frame, { kind: "annotation-removed", id });
     }
+  };
+
+  const remove = (id: string): void => {
+    const row = list.querySelector(`[data-pending-id="${CSS.escape(id)}"]`);
+    if (row !== null) {
+      row.remove();
+    }
+    items.delete(id);
+    renumber();
+    syncEmpty();
+    clearMarker(id);
+    notify();
   };
 
   onMessageFromFrame(iframe, (message) => {
@@ -172,10 +204,162 @@ const wirePending = (iframe: HTMLIFrameElement): void => {
       return;
     }
     const annotation = message.annotation;
-    list.append(buildRow(annotation, () => removeAnnotation(annotation.id)));
+    items.set(annotation.id, annotation);
+    list.append(buildRow(annotation, () => remove(annotation.id)));
     renumber();
     syncEmpty();
+    notify();
   });
+
+  return {
+    annotations: () => [...items.values()],
+    clear: () => {
+      for (const id of items.keys()) {
+        clearMarker(id);
+      }
+      items.clear();
+      list.replaceChildren();
+      renumber();
+      syncEmpty();
+      notify();
+    },
+    onChange: (listener) => listeners.push(listener),
+  };
+};
+
+/** The id-less wire shape of an annotation (Protocol mirror): queue order is identity. */
+const toWire = (annotation: Annotation) =>
+  annotation.kind === "text"
+    ? {
+        kind: "text",
+        selector: annotation.selector,
+        tag: annotation.tag,
+        text: annotation.text,
+        selectedText: annotation.selectedText,
+      }
+    : {
+        kind: "element",
+        selector: annotation.selector,
+        tag: annotation.tag,
+        text: annotation.text,
+      };
+
+/**
+ * Capture the live DOM the human annotated (ADR 0008): post `snapshot-request`
+ * down the Bridge and resolve with the `snapshot-result` the SDK returns. The
+ * chrome cannot read the opaque-origin iframe directly, so this round-trip is the
+ * only path. Rejects (caught by Send) if the frame is gone or the SDK is silent.
+ */
+const requestSnapshot = (iframe: HTMLIFrameElement): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const frame = iframe.contentWindow;
+    if (frame === null) {
+      reject("no artifact frame");
+      return;
+    }
+    let unsubscribe = (): void => {};
+    const timer = window.setTimeout(() => {
+      unsubscribe();
+      reject("snapshot timed out");
+    }, 5000);
+    unsubscribe = onMessageFromFrame(iframe, (message) => {
+      if (message.kind !== "snapshot-result") {
+        return;
+      }
+      window.clearTimeout(timer);
+      unsubscribe();
+      resolve(message.html);
+    });
+    postToFrame(frame, { kind: "snapshot-request" });
+  });
+
+const postFeedback = (
+  key: string,
+  message: string,
+  annotations: readonly Annotation[],
+  domSnapshot: string,
+): Promise<boolean> =>
+  fetch(`/s/${key}/feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      message,
+      annotations: annotations.map(toWire),
+      domSnapshot,
+    }),
+  }).then((response) => response.ok);
+
+/**
+ * Wire the composer: enable Send under the submit rule (a non-empty trimmed
+ * message or at least one annotation), and on Send capture the snapshot, post the
+ * Feedback, then clear on success or surface the failure while preserving the
+ * message and annotations so the human can retry.
+ */
+const createComposer = (
+  iframe: HTMLIFrameElement,
+  config: ChromeConfig,
+  pending: Pending,
+): void => {
+  const input = document.querySelector("[data-composer-input]");
+  const send = document.querySelector("[data-send]");
+  if (
+    !(input instanceof HTMLTextAreaElement) ||
+    !(send instanceof HTMLButtonElement)
+  ) {
+    return;
+  }
+  const label = send.textContent ?? "Send to Agent";
+
+  const isValid = (): boolean =>
+    input.value.trim().length > 0 || pending.annotations().length > 0;
+  const sync = (): void => {
+    send.disabled = !isValid();
+  };
+
+  const reset = (): void => {
+    send.textContent = label;
+    sync();
+  };
+  const fail = (): void => {
+    send.textContent = "Send failed";
+    send.disabled = true;
+    window.setTimeout(reset, 1600);
+  };
+
+  const submit = async (): Promise<void> => {
+    if (!isValid()) {
+      return;
+    }
+    send.disabled = true;
+    send.textContent = "Sending...";
+    const snapshot = await requestSnapshot(iframe).catch(() => null);
+    if (snapshot === null) {
+      fail();
+      return;
+    }
+    const ok = await postFeedback(
+      config.key,
+      input.value,
+      pending.annotations(),
+      snapshot,
+    ).catch(() => false);
+    if (!ok) {
+      fail();
+      return;
+    }
+    input.value = "";
+    pending.clear();
+    reset();
+  };
+
+  input.addEventListener("input", sync);
+  pending.onChange(sync);
+  // `submit` resolves on its own (every await has a `.catch`), so letting the
+  // returned promise settle untracked is safe here.
+  send.addEventListener("click", () => {
+    submit();
+  });
+  sync();
 };
 
 const main = (): void => {
@@ -184,13 +368,14 @@ const main = (): void => {
     return;
   }
   wireCopy("[data-copy-path]", () => Promise.resolve(config.path));
-  wireCopy("[data-copy-snapshot]", () =>
+  wireCopy("[data-copy-source]", () =>
     fetch(config.sourceUrl).then((response) => response.text()),
   );
   const iframe = document.querySelector("[data-artifact]");
   if (iframe instanceof HTMLIFrameElement) {
     wireToggle(iframe);
-    wirePending(iframe);
+    const pending = createPending(iframe);
+    createComposer(iframe, config, pending);
   }
 };
 

@@ -56,6 +56,12 @@ const isBridgeMessage = (value: unknown): value is BridgeMessage => {
   if (value.kind === "annotation-removed") {
     return "id" in value && typeof value.id === "string";
   }
+  if (value.kind === "snapshot-request") {
+    return true;
+  }
+  if (value.kind === "snapshot-result") {
+    return "html" in value && typeof value.html === "string";
+  }
   return false;
 };
 

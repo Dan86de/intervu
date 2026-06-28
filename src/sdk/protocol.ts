@@ -71,11 +71,28 @@ export interface AnnotationRemovedMessage {
   readonly id: string;
 }
 
+/**
+ * Chrome -> iframe: capture the live DOM at Send (ADR 0008). The chrome cannot
+ * read the opaque-origin iframe directly, so it asks the SDK to serialize the
+ * rendered document the human annotated; the reply is `snapshot-result`.
+ */
+export interface SnapshotRequestMessage {
+  readonly kind: "snapshot-request";
+}
+
+/** Iframe -> chrome: the serialized live DOM answering a `snapshot-request`. */
+export interface SnapshotResultMessage {
+  readonly kind: "snapshot-result";
+  readonly html: string;
+}
+
 /** Every payload the Bridge can carry, in either direction. */
 export type BridgeMessage =
   | SetModeMessage
   | AnnotationAddedMessage
-  | AnnotationRemovedMessage;
+  | AnnotationRemovedMessage
+  | SnapshotRequestMessage
+  | SnapshotResultMessage;
 
 /** The namespaced envelope wrapping every Bridge message on the wire. */
 export interface BridgeEnvelope {

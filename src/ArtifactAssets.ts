@@ -148,6 +148,14 @@ export interface ChromeParams {
 const buttonClass =
   "cursor-pointer rounded-md border border-border bg-background px-2.5 py-[5px] text-xs hover:bg-accent disabled:cursor-default disabled:opacity-70";
 
+/** The composer's textarea; static literals for the Tailwind scan (ADR 0004). */
+const composerInputClass =
+  "w-full resize-none rounded-md border border-border bg-background px-2.5 py-2 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground focus:border-primary";
+
+/** The primary "Send to Agent" action, disabled until the submit rule passes. */
+const sendButtonClass =
+  "mt-2 w-full cursor-pointer rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-default disabled:opacity-50";
+
 /**
  * Render the chrome page for a session (ADR 0004): a slim Tailwind/shadcn top bar
  * - filename, the Annotate-mode toggle, and the two working-copy controls - over
@@ -156,8 +164,8 @@ const buttonClass =
  * fed the session's paths through the inline JSON config; styling is the
  * build-time Tailwind output at `/chrome.css`. The iframe `src` is `/s/:key/a/`,
  * so the artifact's relative URLs resolve under that prefix with no `<base>` tag
- * and no URL rewriting. Still an honest shell - Annotate-mode capture, the
- * pending-annotation rows, the composer, and Send arrive in their own slices.
+ * and no URL rewriting. The panel pins a composer (message + Send to Agent) to
+ * its bottom; the in-panel conversation thread arrives in #7.
  */
 export const renderChrome = (params: ChromeParams): string => {
   const safeFilename = escapeHtml(params.filename);
@@ -183,7 +191,7 @@ export const renderChrome = (params: ChromeParams): string => {
       <div class="ml-auto flex gap-2">
         <button type="button" class="${buttonClass} aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground" data-annotate-toggle aria-pressed="false">Annotate</button>
         <button type="button" class="${buttonClass}" data-copy-path>Copy path</button>
-        <button type="button" class="${buttonClass}" data-copy-snapshot>Copy DOM snapshot</button>
+        <button type="button" class="${buttonClass}" data-copy-source>Copy source</button>
       </div>
     </header>
     <main class="flex min-h-0 flex-1">
@@ -194,12 +202,18 @@ export const renderChrome = (params: ChromeParams): string => {
         sandbox="allow-scripts allow-forms allow-popups"
         data-artifact
       ></iframe>
-      <aside class="w-80 flex-none overflow-y-auto border-l border-border bg-panel p-4">
-        <h2 class="m-0 mb-2 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">Pending annotations</h2>
-        <p class="m-0 text-[13px] leading-relaxed text-muted-foreground" data-pending-empty>No annotations yet. Turn on Annotate, then point at elements and text in the artifact.</p>
-        <ul class="m-0 mt-3 hidden list-none p-0" data-pending-list></ul>
-        <h2 class="m-0 mb-2 mt-6 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">Conversation</h2>
-        <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">No feedback yet. The review loop arrives in a later slice.</p>
+      <aside class="flex w-80 flex-none flex-col border-l border-border bg-panel">
+        <div class="min-h-0 flex-1 overflow-y-auto p-4">
+          <h2 class="m-0 mb-2 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">Pending annotations</h2>
+          <p class="m-0 text-[13px] leading-relaxed text-muted-foreground" data-pending-empty>No annotations yet. Turn on Annotate, then point at elements and text in the artifact.</p>
+          <ul class="m-0 mt-3 hidden list-none p-0" data-pending-list></ul>
+          <h2 class="m-0 mb-2 mt-6 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">Conversation</h2>
+          <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">No feedback yet. The review loop arrives in a later slice.</p>
+        </div>
+        <div class="flex-none border-t border-border p-3" data-composer>
+          <textarea class="${composerInputClass}" data-composer-input rows="3" placeholder="Message to the agent..." aria-label="Message to the agent"></textarea>
+          <button type="button" class="${sendButtonClass}" data-send disabled>Send to Agent</button>
+        </div>
       </aside>
     </main>
     <script type="application/json" id="intervu-config">${configJson}</script>

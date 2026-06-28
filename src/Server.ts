@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Option, Path } from "effect";
+import { Duration, Effect, FileSystem, Layer, Option, Path } from "effect";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -7,8 +7,15 @@ import {
 import { AppConfig } from "./AppConfig.ts";
 import * as ArtifactAssets from "./ArtifactAssets.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
-import { OpenSessionRequest } from "./Protocol.ts";
+import * as FeedbackWait from "./FeedbackWait.ts";
+import {
+  OpenSessionRequest,
+  PollRequest,
+  PollResponse,
+  ValidFeedback,
+} from "./Protocol.ts";
 import { type Session, SessionKey } from "./Session.ts";
+import { FeedbackQueued, SessionHub } from "./SessionHub.ts";
 import { SessionStore } from "./SessionStore.ts";
 
 /**
@@ -170,6 +177,85 @@ const sourceRoute = HttpRouter.add(
 );
 
 /**
+ * The chrome's Send target: queue one Feedback for the Session and signal any
+ * waiting poll. The body is re-validated against `ValidFeedback` (non-empty
+ * message or >=1 annotation), so a malformed or empty submission is a `400` and
+ * the queue never holds an empty Feedback. `queueFeedback` then `publish` order
+ * is load-bearing: a poll that subscribed first sees the signal and drains.
+ */
+const feedbackRoute = HttpRouter.add(
+  "POST",
+  "/s/:key/feedback",
+  withSession((session) =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const hub = yield* SessionHub;
+      const feedback = yield* HttpServerRequest.schemaBodyJson(ValidFeedback);
+      yield* store.queueFeedback(session.key, feedback);
+      yield* hub.publish(session.key, new FeedbackQueued());
+      return HttpServerResponse.jsonUnsafe({ queued: true });
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("POST /s/:key/feedback rejected", error).pipe(
+          Effect.as(HttpServerResponse.empty({ status: 400 })),
+        ),
+      ),
+    ),
+  ),
+);
+
+/**
+ * The agent's long-poll (ADR 0009): path-addressed and lookup-without-create, so
+ * an unopened path is a structured `404` (`ReviewNotOpen`) rather than a silent
+ * spawn. For an open Session it holds the request, draining queued Feedback once
+ * the human sends (or returning the `timedOut` marker when the request set a
+ * bound). `Effect.scoped` ties the hub subscription to the request: a killed
+ * poll interrupts this fiber and releases it.
+ */
+const pollRoute = HttpRouter.add(
+  "POST",
+  "/poll",
+  Effect.gen(function* () {
+    const store = yield* SessionStore;
+    const request = yield* HttpServerRequest.schemaBodyJson(PollRequest);
+    const session = yield* store.getByPath(request.path);
+    return yield* Option.match(session, {
+      onNone: () =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { _tag: "ReviewNotOpen", path: request.path },
+            { status: 404 },
+          ),
+        ),
+      onSome: (open) =>
+        Effect.scoped(
+          FeedbackWait.wait(open.key, {
+            timeout: Option.map(
+              Option.fromNullishOr(request.timeoutSeconds),
+              Duration.seconds,
+            ),
+          }).pipe(
+            Effect.flatMap((outcome) =>
+              HttpServerResponse.schemaJson(PollResponse)(
+                new PollResponse({
+                  timedOut: outcome.timedOut,
+                  feedback: outcome.feedback,
+                }),
+              ),
+            ),
+          ),
+        ),
+    });
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logError("POST /poll failed", error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 500 })),
+      ),
+    ),
+  ),
+);
+
+/**
  * The global in-iframe SDK, injected into every artifact, plus the chrome's own
  * controller and stylesheet. All three are built from `src/sdk` + `src/chrome`
  * and served from `BrowserAssets` (ADR 0007); the routes are stable, only the
@@ -220,6 +306,8 @@ export const layer = HttpRouter.serve(
     chromeRoute,
     artifactRoute,
     sourceRoute,
+    feedbackRoute,
+    pollRoute,
     sdkRoute,
     chromeScriptRoute,
     chromeStyleRoute,

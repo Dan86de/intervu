@@ -29,6 +29,17 @@ export class DaemonNotRunning extends Schema.TaggedErrorClass<DaemonNotRunning>(
 ) {}
 
 /**
+ * `intervu poll <file>` found no open Session for the path - the daemon is up
+ * but nothing has been `open`ed there, so there is nothing to poll (ADR 0009).
+ */
+export class ReviewNotOpen extends Schema.TaggedErrorClass<ReviewNotOpen>()(
+  "ReviewNotOpen",
+  {
+    path: Schema.String,
+  },
+) {}
+
+/**
  * A browser asset (the in-iframe SDK, the chrome controller, or the chrome
  * stylesheet) failed to build from source when the daemon started in dev. The
  * shipped binary serves baked assets and never hits this path.

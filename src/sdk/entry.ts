@@ -119,6 +119,14 @@ const main = (): void => {
       applyMode(message.mode);
     } else if (message.kind === "annotation-removed") {
       overlay.removeMarker(message.id);
+    } else if (message.kind === "snapshot-request") {
+      // The live, rendered DOM the human annotated (ADR 0008) - the document
+      // the annotation selectors resolve against, which diverges from the
+      // on-disk source for any interactive artifact.
+      postToParent({
+        kind: "snapshot-result",
+        html: document.documentElement.outerHTML,
+      });
     }
   });
 };

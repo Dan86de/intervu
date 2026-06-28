@@ -3,6 +3,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Option,
   type PlatformError,
   Schedule,
   type Schema,
@@ -15,13 +16,22 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http";
 import { AppConfig } from "./AppConfig.ts";
-import { ServerStartTimeout } from "./Errors.ts";
-import { Health } from "./Protocol.ts";
+import {
+  DaemonNotRunning,
+  ReviewNotOpen,
+  ServerStartTimeout,
+} from "./Errors.ts";
+import { Health, PollResponse } from "./Protocol.ts";
 import { Session } from "./Session.ts";
 
 type EnsureError =
   | ServerStartTimeout
   | PlatformError.PlatformError
+  | HttpClientError.HttpClientError
+  | Schema.SchemaError;
+
+type PollError =
+  | ReviewNotOpen
   | HttpClientError.HttpClientError
   | Schema.SchemaError;
 
@@ -35,12 +45,20 @@ export class ServerLifecycle extends Context.Service<
   ServerLifecycle,
   {
     readonly ensure: Effect.Effect<Health, EnsureError>;
+    readonly requireHealthy: Effect.Effect<
+      Health,
+      DaemonNotRunning | HttpClientError.HttpClientError | Schema.SchemaError
+    >;
     readonly openSession: (
       path: string,
     ) => Effect.Effect<
       Session,
       HttpClientError.HttpClientError | Schema.SchemaError
     >;
+    readonly poll: (
+      path: string,
+      timeoutSeconds: Option.Option<number>,
+    ) => Effect.Effect<PollResponse, PollError>;
   }
 >()("@intervu/ServerLifecycle") {
   static readonly layer = Layer.effect(
@@ -101,6 +119,14 @@ export class ServerLifecycle extends Context.Service<
         ),
       );
 
+      // The poll path: a healthy daemon must already exist - `poll` never spawns
+      // one (ADR 0009), so a refused connection is a definitive `DaemonNotRunning`.
+      const requireHealthy = ping.pipe(
+        Effect.mapError((error) =>
+          isConnRefused(error) ? new DaemonNotRunning() : error,
+        ),
+      );
+
       const openSession = (path: string) =>
         Effect.gen(function* () {
           const request = HttpClientRequest.post(`${baseUrl}/sessions`).pipe(
@@ -110,7 +136,30 @@ export class ServerLifecycle extends Context.Service<
           return yield* HttpClientResponse.schemaBodyJson(Session)(response);
         });
 
-      return { ensure, openSession };
+      // Long-poll: hold a single request open until the daemon returns the
+      // drained Feedback (or the `timedOut` marker). A `404` means nothing is
+      // open at this path - a structured `ReviewNotOpen`, not feedback. The
+      // request carries no response timeout, so an indefinite block is not
+      // severed client-side.
+      const poll = (path: string, timeoutSeconds: Option.Option<number>) =>
+        Effect.gen(function* () {
+          const body = Option.match(timeoutSeconds, {
+            onNone: () => ({ path }),
+            onSome: (seconds) => ({ path, timeoutSeconds: seconds }),
+          });
+          const request = HttpClientRequest.post(`${baseUrl}/poll`).pipe(
+            HttpClientRequest.bodyJsonUnsafe(body),
+          );
+          const response = yield* client.execute(request);
+          if (response.status === 404) {
+            return yield* new ReviewNotOpen({ path });
+          }
+          return yield* HttpClientResponse.schemaBodyJson(PollResponse)(
+            response,
+          );
+        });
+
+      return { ensure, requireHealthy, openSession, poll };
     }),
   );
 }
