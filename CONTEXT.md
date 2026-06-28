@@ -23,7 +23,7 @@ A marker the human attaches to a clicked element or a selected run of text in th
 _Avoid_: comment, marker, note, pin
 
 **Bridge**:
-The only path across the artifact iframe's opaque-origin boundary (ADR 0003): a namespaced `postMessage` exchange between the iframe and the chrome. Messages are validated by frame reference, not origin, and flow both ways - the human's annotations travel up (iframe to chrome), annotation removals and mode changes travel down (chrome to iframe).
+The only path across the artifact iframe's opaque-origin boundary (ADR 0003): a namespaced `postMessage` exchange between the iframe and the chrome. Messages are validated by frame reference, not origin, and flow both ways - the human's annotations travel up (iframe to chrome), annotation removals and mode changes travel down (chrome to iframe), and at Send the chrome requests a **DOM snapshot** (down) which the iframe returns as serialized live DOM (up).
 _Avoid_: connection, link; the server-to-browser **SSE stream** (#7) is a separate path, not the Bridge.
 
 **Annotate-mode**:
@@ -35,6 +35,10 @@ _Avoid_: edit-mode, select-mode, inspect-mode
 **Feedback**:
 One human submission - a message together with its attached annotations and a DOM snapshot - produced by a single "Send to Agent"; the session queues 0..N pending Feedback, and a poll drains them all at once as a TOON collection.
 _Avoid_: prompt (collides with the LLM sense), message, comment
+
+**DOM snapshot**:
+The serialized live DOM of the artifact (`document.documentElement.outerHTML`) captured inside the iframe at Send and carried up the Bridge as part of a Feedback - the rendered document the human annotated and the one the annotation selectors resolve against, which diverges from the artifact's on-disk source for any interactive artifact.
+_Avoid_: source, file contents (the on-disk bytes served at `/s/:key/source` are a separate thing)
 
 **Poll**:
 The agent's long-poll command (`intervu poll <file>`) that blocks silently until the human acts, then returns queued feedback as TOON; safe to kill and re-run with no loss.
