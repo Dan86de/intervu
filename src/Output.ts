@@ -1,0 +1,74 @@
+/**
+ * Pure output shaping for intervu's CLI.
+ *
+ * Commands build plain JS views with these shapers, render them to TOON via
+ * `Toon.encode`, and write through the single `emit` boundary at the CLI. Keep
+ * this module free of effects and IO: every function is a total transformation
+ * from inputs to a serializable view, so renders stay deterministic and unit
+ * testable.
+ */
+
+/**
+ * A session as it appears in the home view. The walking skeleton always renders
+ * an empty list; `SessionStore` (slice #3) is what first populates it.
+ */
+export interface SessionSummary {
+  readonly key: string;
+  readonly status: string;
+}
+
+/**
+ * The content-first home view shown on bare `intervu` invocation, in canonical
+ * key order: `bin`, `description`, `sessions`, `help`.
+ */
+export interface HomeView {
+  readonly bin: string;
+  readonly description: string;
+  readonly sessions: readonly SessionSummary[];
+  readonly help: string;
+}
+
+/**
+ * Shape the home view, pinning key order so the TOON render is stable
+ * regardless of how the caller ordered its fields.
+ */
+export const home = (params: HomeView): HomeView => ({
+  bin: params.bin,
+  description: params.description,
+  sessions: params.sessions,
+  help: params.help,
+});
+
+/**
+ * A structured error view. Errors are success-only here - the failure path is
+ * wired in the AXI-polish slice (#9) - but the shape is the seam they land on.
+ */
+export interface ErrorView {
+  readonly error: {
+    readonly tag: string;
+    readonly message: string;
+  };
+  readonly help: string;
+}
+
+/**
+ * Shape a structured error into its view.
+ */
+export const error = (params: {
+  readonly tag: string;
+  readonly message: string;
+  readonly help: string;
+}): ErrorView => ({
+  error: { tag: params.tag, message: params.message },
+  help: params.help,
+});
+
+/**
+ * Merge two view fragments into one, with `extra` winning on key conflicts.
+ * Used to graft a trailing fragment (a `help` line, an error block) onto a
+ * content view before rendering.
+ */
+export const merge = <A extends object, B extends object>(
+  base: A,
+  extra: B,
+): A & B => ({ ...base, ...extra });
