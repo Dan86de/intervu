@@ -66,6 +66,10 @@ _Avoid_: connection, socket, websocket; the **Bridge** (a different path); TOON 
 
 ### Output and design
 
+**Home view**:
+The content-first view printed on a bare `intervu` invocation (no subcommand): the `bin`, a one-line description, the live Sessions, and a next-step help line. "Live" means `open` Sessions only - `ended` ones are history and are omitted. The CLI reads them straight from the persisted state file (`SessionPersistence.load`), never from the daemon, so the view needs no running daemon and makes zero network calls. Each row carries `{key, path, status}`; `path` is the handle the help line tells the agent to `poll`.
+_Avoid_: help text, dashboard, status screen; do not confuse with the **Chrome** (the browser review UI).
+
 **TOON**:
 Token-Oriented Object Notation - the published compact, schema-aware encoding of the JSON data model (the `@toon-format/toon` package) that intervu emits for all CLI output. Used encode-only; nothing in intervu parses TOON back.
 _Avoid_: "Token-Optimized Object Notation" (the spec's word is "Oriented"); JSON output
@@ -83,6 +87,7 @@ _Avoid_: MCP (intervu is a CLI, not an MCP server)
 - The human **End**s a **Session** from the chrome - the top-bar End control (ends now), or **Send & end** (posts a final **Feedback** and ends atomically); the agent's current or next **Poll** observes the `ended` status and stops. Re-opening the path resurrects the Session.
 - **Presence** reflects the agent's state across the **poll** lifecycle of a **Session**.
 - Every CLI command renders its result as **TOON** (a string passes through raw; an object is `encode`d); **AXI** is the design discipline, **TOON** the output format it mandates.
+- The **Home view** lists the `open` **Sessions** read straight from the persisted state file, so a bare `intervu` needs no daemon and shows no **Presence** (a daemon-only signal); an `ended` Session is omitted, and an empty list is an explicit empty-state, not an error.
 - The loop's three transports are distinct paths: the **Bridge** carries iframe<->chrome, the **poll** carries server->agent (feedback out), and the **SSE stream** carries server->browser (reload, **Conversation** appends, **Presence**).
 
 ## Example dialogue
