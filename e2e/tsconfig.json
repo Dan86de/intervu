@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Effect-TS/tsgo/refs/heads/main/schema.json",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // The E2E specs are Playwright (Node) TypeScript that also reaches into the
+    // browser via `page.evaluate`, so they need the DOM lib. `@types/bun` (already
+    // a devDep) supplies the Node globals Playwright's own types reference, e.g.
+    // `Buffer` - we avoid `@types/node` so the daemon's root typecheck, which
+    // auto-includes every `@types` package, stays on the single Bun typings set.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["bun"],
+    "plugins": []
+  },
+  "exclude": [],
+  "include": ["**/*.ts"]
+}

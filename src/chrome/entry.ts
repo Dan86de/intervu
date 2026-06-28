@@ -98,6 +98,7 @@ const buildRow = (
 ): HTMLLIElement => {
   const row = document.createElement("li");
   row.dataset.pendingId = annotation.id;
+  row.dataset.kind = annotation.kind;
   row.className =
     "mb-2 flex items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-[13px]";
 

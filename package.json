@@ -7,6 +7,7 @@
     "@biomejs/biome": "2.5.1",
     "@effect/tsgo": "^0.14.6",
     "@effect/vitest": "4.0.0-beta.91",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/cli": "^4",
     "@types/bun": "latest",
     "@typescript/native-preview": "^7.0.0-dev.20260628.1",
@@ -30,10 +31,11 @@
     "format": "bunx --bun @biomejs/biome format --write",
     "lint": "bunx --bun @biomejs/biome lint --write",
     "check": "bunx --bun @biomejs/biome check --write",
-    "check:types": "bunx tsc --noEmit && bunx tsc --noEmit -p tsconfig.browser.json",
+    "check:types": "bunx tsc --noEmit && bunx tsc --noEmit -p tsconfig.browser.json && bunx tsc --noEmit -p e2e/tsconfig.json",
     "dev": "bun --watch src/main.ts",
     "start": "bun src/main.ts",
     "test": "vitest run --passWithNoTests",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
   }
 }

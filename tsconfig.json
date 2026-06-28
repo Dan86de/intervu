@@ -40,6 +40,13 @@
   // built by `Bun.build`; they typecheck under `tsconfig.browser.json` with the
   // DOM lib. The DOM-free daemon still typechecks `src/sdk/protocol.ts` through
   // its server-side import of the shared annotation types. `tests/sdk` drives the
-  // DOM capture logic, so it typechecks under the browser config too.
-  "exclude": ["src/sdk", "src/chrome", "tests/sdk"]
+  // DOM capture logic, so it typechecks under the browser config too; the
+  // Playwright E2E specs and config typecheck under `e2e/tsconfig.json`.
+  "exclude": [
+    "src/sdk",
+    "src/chrome",
+    "tests/sdk",
+    "e2e",
+    "playwright.config.ts"
+  ]
 }

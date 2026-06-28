@@ -5,3 +5,5 @@ dist
 .env
 .DS_Store
 .claude/settings.local.json
+test-results
+playwright-report
