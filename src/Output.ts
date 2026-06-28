@@ -40,6 +40,28 @@ export const home = (params: HomeView): HomeView => ({
 });
 
 /**
+ * A Session as printed by `open`, in canonical key order: `key`, `path`,
+ * `status`, `help`.
+ */
+export interface SessionView {
+  readonly key: string;
+  readonly path: string;
+  readonly status: string;
+  readonly help: string;
+}
+
+/**
+ * Shape the Session view, pinning key order so the TOON render is stable
+ * regardless of how the caller ordered its fields.
+ */
+export const session = (params: SessionView): SessionView => ({
+  key: params.key,
+  path: params.path,
+  status: params.status,
+  help: params.help,
+});
+
+/**
  * A structured error view. Errors are success-only here - the failure path is
  * wired in the AXI-polish slice (#9) - but the shape is the seam they land on.
  */

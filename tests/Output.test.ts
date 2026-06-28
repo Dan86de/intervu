@@ -25,6 +25,25 @@ describe("Output.home", () => {
   });
 });
 
+describe("Output.session", () => {
+  it("shapes the session view in canonical key order", () => {
+    const view = Output.session({
+      help: "next",
+      status: "open",
+      path: "/tmp/a.html",
+      key: "abc",
+    });
+
+    expect(Object.keys(view)).toEqual(["key", "path", "status", "help"]);
+    expect(view).toEqual({
+      key: "abc",
+      path: "/tmp/a.html",
+      status: "open",
+      help: "next",
+    });
+  });
+});
+
 describe("Output.error", () => {
   it("shapes a structured error view", () => {
     const view = Output.error({
