@@ -20,6 +20,14 @@ does things app code must not.
 When you grep the clone, you are looking for *what API to call*, not *how to write your
 own modules*.
 
+## GitHub Operations
+
+Use the `gh-axi` skill for **all** GitHub operations in this repository - issues,
+pull requests, workflow runs, workflows, releases, repositories, labels, search, and
+raw API access. Whenever a task touches GitHub (listing or filing issues, reviewing or
+merging PRs, checking CI runs, cutting releases, or querying the GitHub API), invoke
+`gh-axi` rather than calling `gh` or the GitHub API directly.
+
 ## Code Rules (apply to every file you write in this repo)
 
 Before writing or editing any TypeScript, confirm the change does not introduce any of
