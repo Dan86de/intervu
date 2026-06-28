@@ -7,8 +7,10 @@
     "@biomejs/biome": "2.5.1",
     "@effect/tsgo": "^0.14.6",
     "@effect/vitest": "4.0.0-beta.91",
+    "@tailwindcss/cli": "^4",
     "@types/bun": "latest",
     "@typescript/native-preview": "^7.0.0-dev.20260628.1",
+    "tailwindcss": "^4",
     "vitest": "^4.1.9"
   },
   "peerDependencies": {
@@ -21,11 +23,12 @@
   },
   "scripts": {
     "prepare": "effect-tsgo patch",
-    "build": "bun scripts/build.ts",
+    "build:browser": "bun scripts/build-browser.ts",
+    "build": "bun run build:browser && bun scripts/build.ts",
     "format": "bunx --bun @biomejs/biome format --write",
     "lint": "bunx --bun @biomejs/biome lint --write",
     "check": "bunx --bun @biomejs/biome check --write",
-    "check:types": "bunx tsc --noEmit",
+    "check:types": "bunx tsc --noEmit && bunx tsc --noEmit -p tsconfig.browser.json",
     "dev": "bun --watch src/main.ts",
     "start": "bun src/main.ts",
     "test": "vitest run --passWithNoTests",

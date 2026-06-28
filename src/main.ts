@@ -4,6 +4,7 @@ import { Argument, Command } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import { AppConfig, version } from "./AppConfig.ts";
 import * as Browser from "./Browser.ts";
+import { BrowserAssets } from "./BrowserAssets.ts";
 import { ArtifactNotFound, DaemonNotRunning } from "./Errors.ts";
 import * as Output from "./Output.ts";
 import * as Server from "./Server.ts";
@@ -81,6 +82,7 @@ const server = Command.make("server", {}, () =>
     yield* fs.writeFileString(config.pidFile, `${process.pid}`);
 
     const serverLayer = Server.layer.pipe(
+      Layer.provide(BrowserAssets.layer),
       Layer.provide(
         BunHttpServer.layer({
           hostname: config.hostname,

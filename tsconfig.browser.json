@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Effect-TS/tsgo/refs/heads/main/schema.json",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The in-iframe SDK and the chrome controller are plain DOM TypeScript bundled
+    // by `Bun.build` for the browser, never emitted by `tsc`. They need the DOM
+    // lib (and must not see the Bun/server `@types`), so they typecheck under this
+    // config instead of the root one, which stays DOM-free for the daemon code.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": [],
+    "plugins": []
+  },
+  // Override the root's `exclude` (which hides these dirs from the DOM-free
+  // daemon typecheck) so they are this config's inputs instead.
+  "exclude": [],
+  "include": ["src/sdk/**/*.ts", "src/chrome/**/*.ts"]
+}

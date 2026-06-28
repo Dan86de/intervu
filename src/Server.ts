@@ -6,6 +6,7 @@ import {
 } from "effect/unstable/http";
 import { AppConfig } from "./AppConfig.ts";
 import * as ArtifactAssets from "./ArtifactAssets.ts";
+import { BrowserAssets } from "./BrowserAssets.ts";
 import { OpenSessionRequest } from "./Protocol.ts";
 import { type Session, SessionKey } from "./Session.ts";
 import { SessionStore } from "./SessionStore.ts";
@@ -169,17 +170,42 @@ const sourceRoute = HttpRouter.add(
 );
 
 /**
- * The global in-iframe SDK route, injected into every artifact. A placeholder
- * now; the annotation slice swaps only the served bytes, not this route.
+ * The global in-iframe SDK, injected into every artifact, plus the chrome's own
+ * controller and stylesheet. All three are built from `src/sdk` + `src/chrome`
+ * and served from `BrowserAssets` (ADR 0007); the routes are stable, only the
+ * served bytes vary between the dev build and the baked bundle.
  */
 const sdkRoute = HttpRouter.add(
   "GET",
   "/sdk.js",
-  Effect.succeed(
-    HttpServerResponse.text(ArtifactAssets.sdkPlaceholder, {
+  Effect.gen(function* () {
+    const assets = yield* BrowserAssets;
+    return HttpServerResponse.text(assets.sdkJs, {
       contentType: "text/javascript",
-    }),
-  ),
+    });
+  }),
+);
+
+const chromeScriptRoute = HttpRouter.add(
+  "GET",
+  "/chrome.js",
+  Effect.gen(function* () {
+    const assets = yield* BrowserAssets;
+    return HttpServerResponse.text(assets.chromeJs, {
+      contentType: "text/javascript",
+    });
+  }),
+);
+
+const chromeStyleRoute = HttpRouter.add(
+  "GET",
+  "/chrome.css",
+  Effect.gen(function* () {
+    const assets = yield* BrowserAssets;
+    return HttpServerResponse.text(assets.chromeCss, {
+      contentType: "text/css",
+    });
+  }),
 );
 
 /**
@@ -195,5 +221,7 @@ export const layer = HttpRouter.serve(
     artifactRoute,
     sourceRoute,
     sdkRoute,
+    chromeScriptRoute,
+    chromeStyleRoute,
   ),
 );

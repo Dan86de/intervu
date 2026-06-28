@@ -1,0 +1,32 @@
+/*
+ * The chrome's stylesheet (ADR 0004), compiled at build time by Tailwind v4
+ * into the static CSS served at `/chrome.css` - never the in-browser WASM
+ * runtime. `source(none)` disables automatic content detection so the candidate
+ * scan is deterministic: only the rendered markup (ArtifactAssets.renderChrome)
+ * and this controller are scanned, both of which carry their classes statically
+ * (no computed class strings). The artifact iframe keeps its own CSS untouched;
+ * in-iframe annotation markers are shadow-scoped and do not use Tailwind.
+ */
+@import "tailwindcss" source(none);
+@source "../ArtifactAssets.ts";
+@source "./entry.ts";
+
+/*
+ * shadcn-style design tokens, applied by hand as utilities in the markup. Values
+ * preserve the chrome's established neutral palette so the Tailwind migration is
+ * visually faithful rather than a redesign.
+ */
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #1a1a1f;
+  --color-surface: #fafafa;
+  --color-panel: #fcfcfd;
+  --color-border: #e2e2e6;
+  --color-muted-foreground: #6b6b76;
+  --color-accent: #f2f2f4;
+  --color-primary: #1a1a1f;
+  --color-primary-foreground: #ffffff;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}

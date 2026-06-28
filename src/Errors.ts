@@ -27,3 +27,15 @@ export class DaemonNotRunning extends Schema.TaggedErrorClass<DaemonNotRunning>(
   "DaemonNotRunning",
   {},
 ) {}
+
+/**
+ * A browser asset (the in-iframe SDK, the chrome controller, or the chrome
+ * stylesheet) failed to build from source when the daemon started in dev. The
+ * shipped binary serves baked assets and never hits this path.
+ */
+export class BrowserAssetBuildError extends Schema.TaggedErrorClass<BrowserAssetBuildError>()(
+  "BrowserAssetBuildError",
+  {
+    reason: Schema.String,
+  },
+) {}

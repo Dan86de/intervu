@@ -127,4 +127,37 @@ describe("ArtifactAssets.renderChrome", () => {
     expect(chrome).not.toContain("<input");
     expect(chrome).not.toContain("<textarea");
   });
+
+  it("links the build-time chrome stylesheet and controller", () => {
+    expect(chrome).toContain('<link rel="stylesheet" href="/chrome.css" />');
+    expect(chrome).toContain('<script src="/chrome.js"></script>');
+    // Styling is the built Tailwind output, not inline CSS.
+    expect(chrome).not.toContain("<style");
+  });
+
+  it("renders the Annotate-mode toggle, initially off", () => {
+    expect(chrome).toContain("data-annotate-toggle");
+    expect(chrome).toContain('aria-pressed="false"');
+    expect(chrome).toContain(">Annotate<");
+    expect(chrome).toContain("bg-background");
+  });
+
+  it("marks the artifact iframe for the controller and shows the pending panel", () => {
+    expect(chrome).toContain("data-artifact");
+    expect(chrome).toContain("Pending annotations");
+    expect(chrome).toContain("data-pending-list");
+  });
+
+  it("embeds the session config the controller reads back", () => {
+    const match = chrome.match(
+      /<script type="application\/json" id="intervu-config">([\s\S]*?)<\/script>/,
+    );
+    expect(match).not.toBeNull();
+    const config: unknown = JSON.parse(match?.[1] ?? "");
+    expect(config).toEqual({
+      path: "/proj/artifact/report.html",
+      sourceUrl: "/s/abc123def4567890/source",
+      key: "abc123def4567890",
+    });
+  });
 });

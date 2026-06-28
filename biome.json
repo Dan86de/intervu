@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!.repos", "!node_modules", "!dist"]
+    "includes": [
+      "**",
+      "!.repos",
+      "!node_modules",
+      "!dist",
+      "!src/generated",
+      "!src/chrome/styles.css"
+    ]
   },
   "formatter": {
     "enabled": true,
