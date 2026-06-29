@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: version or publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Changesets needs full history to detect what to version and tag.
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # When unreleased changesets exist, this opens/updates the "Version
+      # Packages" PR (running `changeset:version`). When that PR is merged and
+      # no changesets remain, it runs `changeset:publish` to build and publish
+      # to npm and create the git tag + GitHub Release. The action writes the
+      # auth `.npmrc` from NPM_TOKEN itself, so no setup-node step is needed.
+      - name: Create Release Pull Request or publish
+        uses: changesets/action@v2
+        with:
+          version: bun run changeset:version
+          publish: bun run changeset:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
