@@ -1,6 +1,6 @@
 {
   "name": "intervu",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AXI-style CLI that turns an agent-generated HTML artifact into a collaborative browser review surface.",
   "keywords": [
     "cli",
