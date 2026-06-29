@@ -58,7 +58,9 @@ export const fromJson = Schema.fromJsonString(schema);
  * encoder is compact). Fails `SchemaError` only if the value does not match the
  * slice schema, which a decoded-then-merged value never does.
  */
-export const toJson = (settings: Settings): Effect.Effect<string, Schema.SchemaError> =>
+export const toJson = (
+  settings: Settings,
+): Effect.Effect<string, Schema.SchemaError> =>
   Schema.encodeEffect(schema)(settings).pipe(
     Effect.map((encoded) => JSON.stringify(encoded, null, 2)),
   );

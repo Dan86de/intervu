@@ -260,31 +260,44 @@ const stop = Command.make("stop", {}, () =>
 );
 
 /**
- * `intervu setup`: wire intervu into Claude Code at the user level (issue #13).
- * Thin glue over `Setup.install`, which installs both the agent Skill (the
- * user-level location Claude Code discovers skills in) and a `SessionStart` Hook
- * (merged into the harness settings file so bare `intervu`'s Home view is
- * injected as session-start context, ADR 0013). Each half reports installed-now
- * versus already-present with its resolved location; the result renders as TOON
- * through the single `emit` boundary with a next-step help line. The Skill is
- * carried baked inside the binary (ADR 0007), so this needs no source tree.
+ * `intervu setup`: wire intervu into Claude Code. Thin glue over `Setup.install`,
+ * which installs both the agent Skill (where Claude Code discovers skills) and a
+ * `SessionStart` Hook (merged into the harness settings file so bare `intervu`'s
+ * Home view is injected as session-start context, ADR 0013). Each half reports
+ * installed-now versus already-present with its resolved location; the result
+ * renders as TOON through the single `emit` boundary with a next-step help line.
+ * The Skill is carried baked inside the binary (ADR 0007), so this needs no
+ * source tree.
+ *
+ * `--project` scopes both halves to the current project's `.claude` (issue #14)
+ * instead of the user-level default, so discovery can be limited to one repo.
  */
-const setup = Command.make("setup", {}, () =>
-  Effect.gen(function* () {
-    const installer = yield* Setup;
-    const result = yield* installer.install;
+const setup = Command.make(
+  "setup",
+  {
+    project: Flag.boolean("project").pipe(
+      Flag.withDescription(
+        "scope setup to the current project's .claude instead of the user-level default",
+      ),
+    ),
+  },
+  ({ project }) =>
+    Effect.gen(function* () {
+      const installer = yield* Setup;
+      const result = yield* installer.install({ project });
 
-    const changed =
-      result.skill.action === "installed" || result.hook.action === "installed";
-    const view = Output.setup({
-      skill: { action: result.skill.action, path: result.skill.path },
-      hook: { action: result.hook.action, path: result.hook.path },
-      help: changed
-        ? "intervu wired up - start a fresh agent session so it discovers the skill and home view, then 'intervu <file>' to open a review"
-        : "intervu already wired up - re-running setup changes nothing",
-    });
-    yield* emit(yield* Toon.encode(view));
-  }),
+      const changed =
+        result.skill.action === "installed" ||
+        result.hook.action === "installed";
+      const view = Output.setup({
+        skill: { action: result.skill.action, path: result.skill.path },
+        hook: { action: result.hook.action, path: result.hook.path },
+        help: changed
+          ? "intervu wired up - start a fresh agent session so it discovers the skill and home view, then 'intervu <file>' to open a review"
+          : "intervu already wired up - re-running setup changes nothing",
+      });
+      yield* emit(yield* Toon.encode(view));
+    }),
 );
 
 const cli = root.pipe(

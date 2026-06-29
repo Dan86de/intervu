@@ -23,6 +23,9 @@ import { SkillAsset } from "../src/SkillAsset.ts";
 const HOME = "/home/test";
 const skillFilePath = `${HOME}/.claude/skills/intervu/SKILL.md`;
 const settingsFilePath = `${HOME}/.claude/settings.json`;
+const PROJECT = "/work/repo";
+const projectSkillFilePath = `${PROJECT}/.claude/skills/intervu/SKILL.md`;
+const projectSettingsFilePath = `${PROJECT}/.claude/settings.json`;
 const SKILL = "# intervu\nopen / poll / --agent-reply / end\n";
 
 const memoryFsLayer = (seed: Record<string, string> = {}) =>
@@ -75,6 +78,7 @@ const testConfig = (homeDir: Option.Option<string>) =>
     pidFile: "/state/server.pid",
     logFile: "/state/server.log",
     homeDir,
+    currentDir: PROJECT,
   });
 
 const setupLayer = (
@@ -92,7 +96,7 @@ describe("Setup.install", () => {
   it.effect("a fresh install writes the Skill and reports installed", () =>
     Effect.gen(function* () {
       const setup = yield* Setup;
-      const result = yield* setup.install;
+      const result = yield* setup.install({ project: false });
 
       expect(result.skill.action).toBe("installed");
       expect(result.skill.path).toBe(skillFilePath);
@@ -106,7 +110,7 @@ describe("Setup.install", () => {
   it.effect("a fresh install merges the Hook and reports installed", () =>
     Effect.gen(function* () {
       const setup = yield* Setup;
-      const result = yield* setup.install;
+      const result = yield* setup.install({ project: false });
 
       expect(result.hook.action).toBe("installed");
       expect(result.hook.path).toBe(settingsFilePath);
@@ -125,11 +129,11 @@ describe("Setup.install", () => {
   it.effect("re-running install is idempotent for both Skill and Hook", () =>
     Effect.gen(function* () {
       const setup = yield* Setup;
-      const first = yield* setup.install;
+      const first = yield* setup.install({ project: false });
       expect(first.skill.action).toBe("installed");
       expect(first.hook.action).toBe("installed");
 
-      const second = yield* setup.install;
+      const second = yield* setup.install({ project: false });
       expect(second.skill.action).toBe("already-present");
       expect(second.skill.path).toBe(skillFilePath);
       expect(second.hook.action).toBe("already-present");
@@ -140,7 +144,7 @@ describe("Setup.install", () => {
   it.effect("merges the Hook into an existing settings file in place", () =>
     Effect.gen(function* () {
       const setup = yield* Setup;
-      const result = yield* setup.install;
+      const result = yield* setup.install({ project: false });
 
       expect(result.hook.action).toBe("installed");
 
@@ -164,7 +168,7 @@ describe("Setup.install", () => {
     () =>
       Effect.gen(function* () {
         const setup = yield* Setup;
-        const error = yield* Effect.flip(setup.install);
+        const error = yield* Effect.flip(setup.install({ project: false }));
         expect(error._tag).toBe("SettingsFileUnparseable");
 
         // The malformed file is left untouched.
@@ -179,7 +183,7 @@ describe("Setup.install", () => {
   it.effect("a drifted Skill file is rewritten and reported installed", () =>
     Effect.gen(function* () {
       const setup = yield* Setup;
-      const result = yield* setup.install;
+      const result = yield* setup.install({ project: false });
 
       expect(result.skill.action).toBe("installed");
 
@@ -192,8 +196,44 @@ describe("Setup.install", () => {
   it.effect("fails HomeDirectoryUnresolved when home is unresolved", () =>
     Effect.gen(function* () {
       const setup = yield* Setup;
-      const error = yield* Effect.flip(setup.install);
+      const error = yield* Effect.flip(setup.install({ project: false }));
       expect(error._tag).toBe("HomeDirectoryUnresolved");
+    }).pipe(Effect.provide(setupLayer({}, Option.none()))),
+  );
+
+  it.effect(
+    "the project flag targets the project's configuration, not the user's",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* Setup;
+        const result = yield* setup.install({ project: true });
+
+        expect(result.skill.path).toBe(projectSkillFilePath);
+        expect(result.hook.path).toBe(projectSettingsFilePath);
+
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(projectSkillFilePath)).toBe(SKILL);
+        const settings = JSON.parse(
+          yield* fs.readFileString(projectSettingsFilePath),
+        );
+        const commands = settings.hooks.SessionStart.flatMap(
+          (group: { hooks: { command: string }[] }) =>
+            group.hooks.map((entry) => entry.command),
+        );
+        expect(commands).toContain("intervu");
+
+        // The user-level locations are left untouched.
+        expect(yield* fs.exists(skillFilePath)).toBe(false);
+        expect(yield* fs.exists(settingsFilePath)).toBe(false);
+      }).pipe(Effect.provide(setupLayer())),
+  );
+
+  it.effect("the project flag needs no home directory", () =>
+    Effect.gen(function* () {
+      const setup = yield* Setup;
+      const result = yield* setup.install({ project: true });
+      expect(result.skill.path).toBe(projectSkillFilePath);
+      expect(result.hook.path).toBe(projectSettingsFilePath);
     }).pipe(Effect.provide(setupLayer({}, Option.none()))),
   );
 });

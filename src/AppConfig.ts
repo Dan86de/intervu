@@ -38,6 +38,7 @@ export class AppConfig extends Context.Service<
     readonly pidFile: string;
     readonly logFile: string;
     readonly homeDir: Option.Option<string>;
+    readonly currentDir: string;
   }
 >()("@intervu/AppConfig") {
   static readonly layer = Layer.effect(
@@ -60,6 +61,10 @@ export class AppConfig extends Context.Service<
         Option.filter((value) => value.length > 0),
       );
       const home = Option.getOrElse(homeDir, () => "");
+      // The current project root: the cwd's `.claude` is where `setup --project`
+      // scopes the Skill and Hook, the way `homeDir` anchors the user-level
+      // default. Always resolvable, so a plain string rather than an Option.
+      const currentDir = process.cwd();
 
       const stateDir = Option.match(override, {
         onSome: (dir) => dir,
@@ -80,6 +85,7 @@ export class AppConfig extends Context.Service<
         pidFile: path.join(stateDir, "server.pid"),
         logFile: path.join(stateDir, "server.log"),
         homeDir,
+        currentDir,
       };
     }),
   );
