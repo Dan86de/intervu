@@ -78,6 +78,24 @@ _Avoid_: "Token-Optimized Object Notation" (the spec's word is "Oriented"); JSON
 The set of 10 agent-ergonomic CLI design principles documented in axi.md, and the class of CLIs built to them: content-first TOON output, a no-argument home view instead of help text, contextual `help` next-step lines, and structured errors on stdout. intervu is one AXI implementation.
 _Avoid_: MCP (intervu is a CLI, not an MCP server)
 
+### The server lifecycle
+
+**Daemon**:
+The single shared background HTTP server (ADR 0002) that solely owns Session state, bound to loopback on the fixed default port, started on demand by a client and adopted across respawns from the persisted state file. The CLI is a thin HTTP client to it.
+_Avoid_: server process, service, background process; the **`server` command** (`intervu server`) is the foreground invocation that *is* the daemon, not a separate thing.
+
+**Takeover**:
+The lifecycle move where a strictly-newer `intervu` client, finding a stale older-version daemon answering `/health` on the port, evicts it - SIGTERM via the shared `server.pid`, wait for the port to free - and spawns its own, so the agent never ends up talking to old code; an equal-or-newer running daemon is reused untouched (the older client "steps aside"). The direction is one predicate: take over iff the running version is strictly less than the client's; an unparseable running version counts as stale.
+_Avoid_: restart, upgrade, kill, replace; **stop** (a deliberate shutdown with no replacement).
+
+**Live connection**:
+Any long-lived request a client holds open against the daemon - an agent's open **poll** or a browser's **SSE stream** (both pass through `SessionHub.subscribe`). The daemon tracks their global count in a reactive gauge and is "idle" exactly when that count is zero (no poll open and no tab connected anywhere).
+_Avoid_: socket, request, connection-to-a-Session; a **Session** persists with zero live connections.
+
+**Idle shutdown**:
+The daemon reclaiming itself: one watcher fiber races a grace sleep (default 30s, `INTERVU_IDLE_TIMEOUT`) against the **live-connection** count and shuts the daemon down once that count has stayed zero for the whole grace window, so a respawned-but-unwatched or cleanly-ended daemon never dangles. A single unified condition (`connections == 0`): a terminal **End** with no tab open reclaims through the same timer, not a separate immediate path, and the grace window covers the spawn->first-connect gap so startup is safe.
+_Avoid_: timeout, auto-stop, reap; **stop** (deliberate) and **Takeover** (replacement by a newer client).
+
 ## Relationships
 
 - A **Session** wraps one **artifact**, shown inside the **chrome**.
@@ -89,6 +107,8 @@ _Avoid_: MCP (intervu is a CLI, not an MCP server)
 - Every CLI command renders its result as **TOON** (a string passes through raw; an object is `encode`d); **AXI** is the design discipline, **TOON** the output format it mandates.
 - The **Home view** lists the `open` **Sessions** read straight from the persisted state file, so a bare `intervu` needs no daemon and shows no **Presence** (a daemon-only signal); an `ended` Session is omitted, and an empty list is an explicit empty-state, not an error.
 - The loop's three transports are distinct paths: the **Bridge** carries iframe<->chrome, the **poll** carries server->agent (feedback out), and the **SSE stream** carries server->browser (reload, **Conversation** appends, **Presence**).
+- The **daemon** starts on demand and reclaims itself three ways: **Takeover** evicts a stale older daemon (a newer client replacing it), **Idle shutdown** retires an unwatched one (zero **live connections** for the grace window), and **stop** ends it deliberately (human or agent).
+- A **live connection** is an open **poll** or **SSE stream**; **Presence** and **Idle shutdown** both read the daemon's connection accounting but answer different questions - agent activity for one Session vs. is-anyone-here across the whole daemon.
 
 ## Example dialogue
 
@@ -103,3 +123,4 @@ _Avoid_: MCP (intervu is a CLI, not an MCP server)
 - **Session** key was described as "content-addressed", but the agent live-edits the artifact, so a content-derived key would break mid-review. Resolved: the key is **path-based** - `hash(realpath(artifact))` - stable across edits; identical content at two paths is two Sessions; renaming an artifact mid-review is not a supported flow.
 - **TOON** is defined as the format for "all CLI output", but the **SSE stream** (#7) is browser-facing, consumed by `EventSource`/JS. Resolved: TOON is the **CLI stdout** format only; the SSE channel carries **JSON** frames. "All output is TOON" scopes to the CLI, not the browser wire.
 - `ended` is a **Session** status, not a **Presence** value. Presence stays the three agent-states (idle / listening / working); when a Session ends, the chrome stops showing Presence and renders an "Ended" pill in the same top-bar region. Resolved: do not add `ended` as a fourth Presence - ended is Session lifecycle, Presence is agent activity. They are pushed as distinct **SSE stream** frames (`PresenceChanged` vs `SessionEnded`).
+- "idle" is overloaded across two scopes. **Presence** `idle` is a per-Session agent state (no agent **poll** open) shown in the chrome; the daemon's idle (the **Idle shutdown** condition) is global and counts *both* polls and **SSE streams**. Resolved: a Session can read Presence `idle` (agent not polling) while a browser tab keeps a **live connection** open, so the daemon is *not* idle. Presence `idle` = agent-not-polling (one Session); daemon-idle = zero live connections (whole daemon). Different scope, different inputs.
