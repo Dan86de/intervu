@@ -19,9 +19,11 @@ import { SkillAsset } from "./SkillAsset.ts";
  * idempotency checks, and the writes all hide behind `install`; the CLI is thin
  * glue that renders the result as TOON.
  *
- * Scope is a single knob: `install` defaults to the user-level `<home>/.claude`
+ * Location is one knob: `install` defaults to the user-level `<home>/.claude`
  * so discovery is global across projects, and `{ project: true }` retargets both
- * halves to the current project's `<cwd>/.claude` instead.
+ * halves to the current project's `<cwd>/.claude` instead. Which halves it wires
+ * is a second knob, `scope`: `"both"` (the default), `"skill-only"`, or
+ * `"hook-only"` (issue #15) - so a human can wire one half without the other.
  */
 
 /** Whether `install` wrote the artifact now or found it already in place. */
@@ -33,16 +35,29 @@ export interface ArtifactInstall {
   readonly path: string;
 }
 
-/** The structured result `install` returns: one entry per artifact it wires. */
+/**
+ * Which halves `install` wires: both (the default), exactly the Skill, or
+ * exactly the Hook. Modelled as a closed sum so the contradictory "wire
+ * nothing" state is unrepresentable; the CLI rejects conflicting flags before
+ * they ever reach here.
+ */
+export type InstallScope = "both" | "skill-only" | "hook-only";
+
+/**
+ * The structured result `install` returns: one entry per artifact it wires.
+ * A half left out of `scope` is absent (`Option.none`), so the report carries
+ * only the artifact(s) that were in scope.
+ */
 export interface SetupResult {
-  readonly skill: ArtifactInstall;
-  readonly hook: ArtifactInstall;
+  readonly skill: Option.Option<ArtifactInstall>;
+  readonly hook: Option.Option<ArtifactInstall>;
 }
 
-/** Where `install` writes: the user-level default, or the current project under
- * `project: true`. */
+/** Where `install` writes and which halves it wires: the user-level default or
+ * the current project under `project: true`, scoped to `both` halves or one. */
 export interface InstallOptions {
   readonly project: boolean;
+  readonly scope: InstallScope;
 }
 
 export class Setup extends Context.Service<
@@ -154,10 +169,12 @@ export class Setup extends Context.Service<
         });
 
       /**
-       * Wire both halves under one call into the scope's `.claude` dir. The
-       * user-level default needs a home and fails `HomeDirectoryUnresolved` when
-       * there is none - distinct from any no-op; the project scope anchors on the
-       * always-resolvable cwd, so it never needs a home.
+       * Wire the in-scope half (or both) under one call into the location's
+       * `.claude` dir. The user-level default needs a home and fails
+       * `HomeDirectoryUnresolved` when there is none - distinct from any no-op;
+       * the project location anchors on the always-resolvable cwd, so it never
+       * needs a home. A half left out of `scope` is skipped entirely (its
+       * effect never runs) and reported absent.
        */
       const install = (options: InstallOptions) =>
         Effect.gen(function* () {
@@ -167,8 +184,12 @@ export class Setup extends Context.Service<
                 onNone: () => Effect.fail(new HomeDirectoryUnresolved({})),
                 onSome: (dir) => Effect.succeed(path.join(dir, ".claude")),
               });
-          const skill = yield* installSkill(claudeDir);
-          const hook = yield* installHook(claudeDir);
+          const skill = yield* installSkill(claudeDir).pipe(
+            Effect.when(Effect.succeed(options.scope !== "hook-only")),
+          );
+          const hook = yield* installHook(claudeDir).pipe(
+            Effect.when(Effect.succeed(options.scope !== "skill-only")),
+          );
           return { skill, hook } satisfies SetupResult;
         });
 

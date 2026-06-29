@@ -7,7 +7,7 @@ import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import * as ErrorReport from "./ErrorReport.ts";
-import { ArtifactNotFound } from "./Errors.ts";
+import { ArtifactNotFound, ConflictingSetupScope } from "./Errors.ts";
 import * as IdleShutdown from "./IdleShutdown.ts";
 import * as Output from "./Output.ts";
 import * as Server from "./Server.ts";
@@ -271,6 +271,11 @@ const stop = Command.make("stop", {}, () =>
  *
  * `--project` scopes both halves to the current project's `.claude` (issue #14)
  * instead of the user-level default, so discovery can be limited to one repo.
+ *
+ * `--skill-only` / `--hooks-only` restrict setup to exactly one half (issue
+ * #15); neither wires both (the default). The two contradict each other, so
+ * combining them fails `ConflictingSetupScope` rather than silently dropping a
+ * flag. The result reports only the half/halves that were in scope.
  */
 const setup = Command.make(
   "setup",
@@ -280,18 +285,30 @@ const setup = Command.make(
         "scope setup to the current project's .claude instead of the user-level default",
       ),
     ),
+    skillOnly: Flag.boolean("skill-only").pipe(
+      Flag.withDescription("wire only the Skill, leaving the Hook untouched"),
+    ),
+    hooksOnly: Flag.boolean("hooks-only").pipe(
+      Flag.withDescription("wire only the Hook, leaving the Skill untouched"),
+    ),
   },
-  ({ project }) =>
+  ({ project, skillOnly, hooksOnly }) =>
     Effect.gen(function* () {
-      const installer = yield* Setup;
-      const result = yield* installer.install({ project });
+      if (skillOnly && hooksOnly) {
+        return yield* Effect.fail(new ConflictingSetupScope({}));
+      }
+      const scope = skillOnly ? "skill-only" : hooksOnly ? "hook-only" : "both";
 
+      const installer = yield* Setup;
+      const result = yield* installer.install({ project, scope });
+
+      const skill = Option.getOrUndefined(result.skill);
+      const hook = Option.getOrUndefined(result.hook);
       const changed =
-        result.skill.action === "installed" ||
-        result.hook.action === "installed";
+        skill?.action === "installed" || hook?.action === "installed";
       const view = Output.setup({
-        skill: { action: result.skill.action, path: result.skill.path },
-        hook: { action: result.hook.action, path: result.hook.path },
+        skill,
+        hook,
         help: changed
           ? "intervu wired up - start a fresh agent session so it discovers the skill and home view, then 'intervu <file>' to open a review"
           : "intervu already wired up - re-running setup changes nothing",

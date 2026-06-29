@@ -3,6 +3,7 @@ import { CliError } from "effect/unstable/cli";
 import {
   ArtifactNotFound,
   BrowserAssetBuildError,
+  ConflictingSetupScope,
   DaemonNotRunning,
   HomeDirectoryUnresolved,
   ReviewNotOpen,
@@ -140,6 +141,16 @@ export const report = (
         tag: error._tag,
         message: `the settings file at ${error.path} is not valid JSON`,
         help: "fix or remove the file, then re-run 'intervu setup'",
+      }),
+    );
+  }
+
+  if (error instanceof ConflictingSetupScope) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: "--skill-only and --hooks-only cannot be combined",
+        help: "pass at most one - or neither to wire both halves - then re-run 'intervu setup'",
       }),
     );
   }

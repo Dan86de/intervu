@@ -107,3 +107,14 @@ export class SettingsFileUnparseable extends Schema.TaggedErrorClass<SettingsFil
     path: Schema.String,
   },
 ) {}
+
+/**
+ * `intervu setup` was given both `--skill-only` and `--hooks-only`, which
+ * contradict each other - each restricts setup to exactly one half, so the two
+ * together name no half at all. Refused with a clear message rather than
+ * silently ignoring one of the flags.
+ */
+export class ConflictingSetupScope extends Schema.TaggedErrorClass<ConflictingSetupScope>()(
+  "ConflictingSetupScope",
+  {},
+) {}

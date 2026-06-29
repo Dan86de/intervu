@@ -196,26 +196,36 @@ export interface SetupArtifactView {
 }
 
 /**
- * The `setup` view, in canonical key order: `skill`, `hook`, then `help`. One
- * entry per artifact `setup` wires.
+ * The `setup` view, in canonical key order: `skill`, `hook`, then `help`. Each
+ * artifact key is present only when that half was in scope (issue #15), so a
+ * `--skill-only` / `--hooks-only` run reports just the half it wired.
  */
 export interface SetupView {
-  readonly skill: SetupArtifactView;
-  readonly hook: SetupArtifactView;
+  readonly skill?: SetupArtifactView;
+  readonly hook?: SetupArtifactView;
   readonly help: string;
 }
 
 /**
  * Shape the `setup` result, pinning key order so the TOON render is stable
- * regardless of how the caller ordered its fields.
+ * regardless of how the caller ordered its fields. An out-of-scope half is
+ * passed as `undefined` and omitted from the view entirely.
  */
 export const setup = (params: {
-  readonly skill: { readonly action: string; readonly path: string };
-  readonly hook: { readonly action: string; readonly path: string };
+  readonly skill?:
+    | { readonly action: string; readonly path: string }
+    | undefined;
+  readonly hook?:
+    | { readonly action: string; readonly path: string }
+    | undefined;
   readonly help: string;
 }): SetupView => ({
-  skill: { action: params.skill.action, path: params.skill.path },
-  hook: { action: params.hook.action, path: params.hook.path },
+  ...(params.skill
+    ? { skill: { action: params.skill.action, path: params.skill.path } }
+    : {}),
+  ...(params.hook
+    ? { hook: { action: params.hook.action, path: params.hook.path } }
+    : {}),
   help: params.help,
 });
 

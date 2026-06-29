@@ -4,6 +4,7 @@ import { CliError } from "effect/unstable/cli";
 import * as ErrorReport from "../src/ErrorReport.ts";
 import {
   ArtifactNotFound,
+  ConflictingSetupScope,
   DaemonNotRunning,
   ReviewNotOpen,
   ServerStartTimeout,
@@ -54,6 +55,16 @@ describe("ErrorReport.report", () => {
     const value = Option.getOrThrow(view);
     expect(value.error.tag).toBe("DaemonNotRunning");
     expect(value.help).toContain("intervu <file>");
+  });
+
+  it("explains a setup scope conflict and points back at one flag", () => {
+    const view = ErrorReport.report(new ConflictingSetupScope(), ctx);
+
+    const value = Option.getOrThrow(view);
+    expect(value.error.tag).toBe("ConflictingSetupScope");
+    expect(value.error.message).toContain("--skill-only");
+    expect(value.error.message).toContain("--hooks-only");
+    expect(value.help).toContain("intervu setup");
   });
 
   it("renders a generic envelope for infra errors, pointing at the log", () => {

@@ -185,6 +185,43 @@ describe("Output.ended", () => {
   });
 });
 
+describe("Output.setup", () => {
+  it("shapes both halves in canonical key order", () => {
+    const view = Output.setup({
+      help: "wired up",
+      hook: { action: "installed", path: "/h/.claude/settings.json" },
+      skill: { action: "already-present", path: "/h/.claude/skills/x" },
+    });
+
+    expect(Object.keys(view)).toEqual(["skill", "hook", "help"]);
+    expect(view).toEqual({
+      skill: { action: "already-present", path: "/h/.claude/skills/x" },
+      hook: { action: "installed", path: "/h/.claude/settings.json" },
+      help: "wired up",
+    });
+  });
+
+  it("omits the Hook when only the Skill was in scope", () => {
+    const view = Output.setup({
+      skill: { action: "installed", path: "/h/.claude/skills/x" },
+      help: "skill only",
+    });
+
+    expect(Object.keys(view)).toEqual(["skill", "help"]);
+    expect("hook" in view).toBe(false);
+  });
+
+  it("omits the Skill when only the Hook was in scope", () => {
+    const view = Output.setup({
+      hook: { action: "installed", path: "/h/.claude/settings.json" },
+      help: "hooks only",
+    });
+
+    expect(Object.keys(view)).toEqual(["hook", "help"]);
+    expect("skill" in view).toBe(false);
+  });
+});
+
 describe("Output.merge", () => {
   it("combines fragments with extra winning on conflict", () => {
     const merged = Output.merge(
