@@ -103,8 +103,12 @@ intervu's agent-facing description of the review loop - a markdown document auth
 _Avoid_: prompt (collides with the LLM sense), guide, instructions, docs
 
 **Setup**:
-The one-command wiring (`intervu setup`) that makes intervu discoverable to the agent. This slice (#12) installs the **Skill** at the user-level location and reports, as content-first TOON, whether it was installed-now or already-present and where. Idempotent: re-running is a clean no-op (an already-present Skill is not rewritten). The session-start hook half is added later under the same `install` interface.
+The one-command wiring (`intervu setup`) that makes intervu discoverable to the agent: it installs the **Skill** where Claude Code finds skills and registers the session-start **Hook**, and reports, as content-first TOON, for each half whether it was installed-now or already-present and where. Writes to the user-level `~/.claude` by default so discovery is global across projects; `--project` retargets both halves to the current repo's `.claude`, and `--skill-only` / `--hooks-only` wire one half without the other (ADR 0017). Idempotent: re-running is a clean no-op (a byte-identical Skill is not rewritten, and an already-present Hook is left in place), and the settings merge is schema-checked and no-clobber - it never overwrites a config file it cannot decode.
 _Avoid_: install, configure, init (the command is `setup`); **Takeover** (a daemon-lifecycle move, unrelated)
+
+**Hook (session-start / ambient context)**:
+The `SessionStart` entry that **Setup** merges into Claude Code's settings file (`~/.claude/settings.json`) so the harness runs bare `intervu` at session start and injects its **Home view** - the live `open` **Sessions** plus the one-line description - as ambient context, so a fresh agent session already knows which reviews are waiting with zero extra calls. Fires once when the session begins, not per turn (ADR 0017); the payload reuses the Home view as-is, whose no-daemon, no-network, persisted-state-only read (ADR 0013) is exactly what a session-start hook needs to stay fast and side-effect-free. Recognized as intervu's own by its `intervu` command, which is how the merge stays idempotent.
+_Avoid_: per-prompt hook (it fires at session start only), prompt (collides with the LLM sense); do not confuse the **Skill** (the loop's description) with the Hook (the ambient surfacing of live Sessions).
 
 ## Relationships
 
@@ -119,7 +123,7 @@ _Avoid_: install, configure, init (the command is `setup`); **Takeover** (a daem
 - The loop's three transports are distinct paths: the **Bridge** carries iframe<->chrome, the **poll** carries server->agent (feedback out), and the **SSE stream** carries server->browser (reload, **Conversation** appends, **Presence**).
 - The **daemon** starts on demand and reclaims itself three ways: **Takeover** evicts a stale older daemon (a newer client replacing it), **Idle shutdown** retires an unwatched one (zero **live connections** for the grace window), and **stop** ends it deliberately (human or agent).
 - A **live connection** is an open **poll** or **SSE stream**; **Presence** and **Idle shutdown** both read the daemon's connection accounting but answer different questions - agent activity for one Session vs. is-anyone-here across the whole daemon.
-- **Setup** installs the **Skill** so the agent reaches for intervu on its own; this extends intervu's **AXI** conformance from runtime ergonomics to discoverability - the Skill is the agent-facing description of the loop.
+- **Setup** installs the **Skill** and registers the session-start **Hook** so the agent reaches for intervu on its own and a fresh session already knows which reviews are live; this extends intervu's **AXI** conformance from runtime ergonomics to discoverability - the Skill is the agent-facing description of the loop, the Hook injects the **Home view** as ambient context.
 
 ## Example dialogue
 
