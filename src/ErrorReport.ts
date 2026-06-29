@@ -6,6 +6,8 @@ import {
   DaemonNotRunning,
   ReviewNotOpen,
   ServerStartTimeout,
+  StaleDaemon,
+  StaleServerTakeover,
 } from "./Errors.ts";
 import * as Output from "./Output.ts";
 
@@ -65,6 +67,26 @@ export const report = (
         tag: error._tag,
         message: "the review daemon is not running",
         help: "start a review - run 'intervu <file>' to spawn the daemon",
+      }),
+    );
+  }
+
+  if (error instanceof StaleDaemon) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: "a stale, older-version daemon is running",
+        help: "re-run 'intervu <file>' to take over, then poll again",
+      }),
+    );
+  }
+
+  if (error instanceof StaleServerTakeover) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: `could not take over the stale daemon on port ${error.port}: ${error.reason}`,
+        help: "run 'intervu stop' (or kill it manually), then re-run 'intervu <file>'",
       }),
     );
   }

@@ -5,6 +5,8 @@ import {
   Ref,
   Schema,
   type Scope,
+  type Stream,
+  SubscriptionRef,
   SynchronizedRef,
 } from "effect";
 import * as Context from "effect/Context";
@@ -100,6 +102,11 @@ export const derivePresence = (state: PresenceState): Presence =>
  * concurrent callers share one hub. A per-key subscriber count (tracked by the
  * subscribe scope's finalizer) backs the long-poll cleanup test and the SSE
  * route; a separate per-key Presence state backs the indicator.
+ *
+ * A single global live-connection gauge (`SubscriptionRef<number>`; ADR 0016)
+ * is bumped at the same `subscribe` seam: every open poll and every open SSE
+ * stream counts once, so the daemon is "idle" exactly when it reads zero. The
+ * reactive `connectionChanges` stream drives `IdleShutdown`.
  */
 export class SessionHub extends Context.Service<
   SessionHub,
@@ -115,6 +122,8 @@ export class SessionHub extends Context.Service<
       wasDelivery: boolean,
     ) => Effect.Effect<void>;
     readonly presence: (key: SessionKey) => Effect.Effect<Presence>;
+    readonly liveConnections: Effect.Effect<number>;
+    readonly connectionChanges: Stream.Stream<number>;
   }
 >()("@intervu/SessionHub") {
   static readonly layer = Layer.effect(
@@ -125,6 +134,7 @@ export class SessionHub extends Context.Service<
       );
       const counts = yield* Ref.make(new Map<SessionKey, number>());
       const presences = yield* Ref.make(new Map<SessionKey, PresenceState>());
+      const connections = yield* SubscriptionRef.make(0);
 
       const bump =
         (key: SessionKey, delta: number) => (map: Map<SessionKey, number>) => {
@@ -150,14 +160,23 @@ export class SessionHub extends Context.Service<
       const publish = (key: SessionKey, event: HubEvent): Effect.Effect<void> =>
         hubFor(key).pipe(Effect.flatMap((hub) => PubSub.publish(hub, event)));
 
+      // The single subscribe seam (ADR 0016): both the per-key subscriber count
+      // and the global live-connection gauge move together here, and the scope
+      // finalizer reverses both, so a killed poll or a closed SSE stream is
+      // accounted for symmetrically.
       const subscribe = (key: SessionKey) =>
         hubFor(key).pipe(
           Effect.flatMap((hub) =>
             Effect.gen(function* () {
               const subscription = yield* PubSub.subscribe(hub);
               yield* Ref.update(counts, bump(key, 1));
+              yield* SubscriptionRef.update(connections, (n) => n + 1);
               yield* Effect.addFinalizer(() =>
-                Ref.update(counts, bump(key, -1)),
+                Ref.update(counts, bump(key, -1)).pipe(
+                  Effect.flatMap(() =>
+                    SubscriptionRef.update(connections, (n) => n - 1),
+                  ),
+                ),
               );
               return subscription;
             }),
@@ -166,6 +185,9 @@ export class SessionHub extends Context.Service<
 
       const subscribers = (key: SessionKey): Effect.Effect<number> =>
         Ref.get(counts).pipe(Effect.map((map) => map.get(key) ?? 0));
+
+      const liveConnections = SubscriptionRef.get(connections);
+      const connectionChanges = SubscriptionRef.changes(connections);
 
       const presence = (key: SessionKey): Effect.Effect<Presence> =>
         Ref.get(presences).pipe(
@@ -214,6 +236,8 @@ export class SessionHub extends Context.Service<
         enterPoll,
         exitPoll,
         presence,
+        liveConnections,
+        connectionChanges,
       };
     }),
   );

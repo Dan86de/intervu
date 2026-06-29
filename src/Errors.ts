@@ -40,6 +40,30 @@ export class ReviewNotOpen extends Schema.TaggedErrorClass<ReviewNotOpen>()(
 ) {}
 
 /**
+ * A stale (strictly-older) daemon answered `/health` on the port but could not
+ * be evicted to take over (ADR 0015): the shared pidfile is missing or garbage,
+ * or the daemon did not exit within the takeover window. The client refuses to
+ * spawn into an occupied port and surfaces this instead.
+ */
+export class StaleServerTakeover extends Schema.TaggedErrorClass<StaleServerTakeover>()(
+  "StaleServerTakeover",
+  {
+    port: Schema.Number,
+    reason: Schema.String,
+  },
+) {}
+
+/**
+ * `intervu poll`/`end` found a stale (strictly-older) daemon (ADR 0015). The
+ * spawn-free client paths (ADR 0009) do not take over inline; they refuse and
+ * redirect the agent to re-run `intervu <file>` (which performs the takeover).
+ */
+export class StaleDaemon extends Schema.TaggedErrorClass<StaleDaemon>()(
+  "StaleDaemon",
+  {},
+) {}
+
+/**
  * A browser asset (the in-iframe SDK, the chrome controller, or the chrome
  * stylesheet) failed to build from source when the daemon started in dev. The
  * shipped binary serves baked assets and never hits this path.

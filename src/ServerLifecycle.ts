@@ -20,15 +20,72 @@ import {
   DaemonNotRunning,
   ReviewNotOpen,
   ServerStartTimeout,
+  StaleDaemon,
+  StaleServerTakeover,
 } from "./Errors.ts";
 import { EndResponse, Health, PollResponse } from "./Protocol.ts";
 import { Session } from "./Session.ts";
 
 type EnsureError =
   | ServerStartTimeout
+  | StaleServerTakeover
   | PlatformError.PlatformError
   | HttpClientError.HttpClientError
   | Schema.SchemaError;
+
+/**
+ * Parse a `major.minor.patch` string into a numeric tuple, or `None` when it is
+ * not three dot-separated integers (ADR 0015). Pre-release / build suffixes are
+ * not modelled - the version is a controlled `0.0.0`-shaped string.
+ */
+const parseVersion = (
+  version: string,
+): Option.Option<readonly [number, number, number]> => {
+  const parts = version.split(".");
+  if (parts.length !== 3) {
+    return Option.none();
+  }
+  const [major, minor, patch] = parts.map((part) => Number.parseInt(part, 10));
+  return major !== undefined &&
+    minor !== undefined &&
+    patch !== undefined &&
+    Number.isInteger(major) &&
+    Number.isInteger(minor) &&
+    Number.isInteger(patch)
+    ? Option.some([major, minor, patch] as const)
+    : Option.none();
+};
+
+/**
+ * The takeover predicate (ADR 0015): is the running daemon strictly older than
+ * this client? Compares the two versions as numeric `major.minor.patch` tuples;
+ * an unparseable *running* version counts as stale (take over), while an
+ * unparseable *client* version never evicts (defensive - our own version is the
+ * controlled `0.0.0`-shaped string). Equal-or-newer is reused, so only a
+ * strictly-newer client ever replaces a server.
+ */
+export const isStaleVersion = (
+  runningVersion: string,
+  clientVersion: string,
+): boolean => {
+  const running = parseVersion(runningVersion);
+  if (Option.isNone(running)) {
+    return true;
+  }
+  const client = parseVersion(clientVersion);
+  if (Option.isNone(client)) {
+    return false;
+  }
+  const [rMajor, rMinor, rPatch] = running.value;
+  const [cMajor, cMinor, cPatch] = client.value;
+  if (rMajor !== cMajor) {
+    return rMajor < cMajor;
+  }
+  if (rMinor !== cMinor) {
+    return rMinor < cMinor;
+  }
+  return rPatch < cPatch;
+};
 
 type PollError =
   | ReviewNotOpen
@@ -52,7 +109,14 @@ export class ServerLifecycle extends Context.Service<
     readonly ensure: Effect.Effect<Health, EnsureError>;
     readonly requireHealthy: Effect.Effect<
       Health,
-      DaemonNotRunning | HttpClientError.HttpClientError | Schema.SchemaError
+      | DaemonNotRunning
+      | StaleDaemon
+      | HttpClientError.HttpClientError
+      | Schema.SchemaError
+    >;
+    readonly signalStop: Effect.Effect<
+      Option.Option<number>,
+      PlatformError.PlatformError
     >;
     readonly openSession: (
       path: string,
@@ -118,19 +182,110 @@ export class ServerLifecycle extends Context.Service<
         ),
       );
 
+      // Read the shared `server.pid` and SIGTERM the daemon, the one channel
+      // that works across the version gap (ADR 0015): every version writes the
+      // pidfile and dies gracefully on the signal. Returns the signalled pid, or
+      // `None` when there is nothing to stop - the pidfile is absent, holds a
+      // non-numeric pid, or names a process that is already gone (`process.kill`
+      // throws, treated as the benign no-op). Shared by `intervu stop` and
+      // takeover; a genuine pidfile read error still propagates.
+      const signalStop: Effect.Effect<
+        Option.Option<number>,
+        PlatformError.PlatformError
+      > = Effect.gen(function* () {
+        const exists = yield* fs.exists(config.pidFile);
+        if (!exists) {
+          return Option.none();
+        }
+        const pidText = yield* fs.readFileString(config.pidFile);
+        const pid = Number.parseInt(pidText.trim(), 10);
+        if (Number.isNaN(pid)) {
+          return Option.none();
+        }
+        const signalled = yield* Effect.try(() =>
+          process.kill(pid, "SIGTERM"),
+        ).pipe(Effect.orElseSucceed(() => false));
+        return signalled ? Option.some(pid) : Option.none();
+      });
+
+      // Probe whether the port is free: a `/health` answer (or any non-refused
+      // error) means the old daemon is still bound; a connection-refused means
+      // it is gone.
+      const probePortFree: Effect.Effect<boolean> = ping.pipe(
+        Effect.as(false),
+        Effect.catch((error) => Effect.succeed(isConnRefused(error))),
+      );
+
+      // After SIGTERM, wait for the stale daemon to release the port, capped at
+      // ~5s. If it will not exit in that window the takeover cannot proceed.
+      const waitPortFree = probePortFree.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced("100 millis"),
+          until: (free) => free,
+        }),
+        Effect.timeout("5 seconds"),
+        Effect.catchTag("TimeoutError", () =>
+          Effect.fail(
+            new StaleServerTakeover({
+              port: config.port,
+              reason:
+                "the stale daemon did not exit within the takeover window",
+            }),
+          ),
+        ),
+      );
+
+      // Evict a strictly-older daemon and spawn our own (ADR 0015): signal via
+      // the pidfile, wait for the port to free, then spawn and wait healthy. A
+      // missing/garbage pidfile (nothing to signal) means the old daemon is
+      // orphaned on the port and the client refuses to spawn into it.
+      const takeover = Effect.gen(function* () {
+        const signalled = yield* signalStop;
+        if (Option.isNone(signalled)) {
+          return yield* Effect.fail(
+            new StaleServerTakeover({
+              port: config.port,
+              reason:
+                "a stale daemon holds the port but its pidfile is missing or invalid",
+            }),
+          );
+        }
+        yield* waitPortFree;
+        yield* spawnDaemon;
+        return yield* waitHealthy;
+      });
+
+      // The `open` path (ADR 0015): spawn when nothing answers, otherwise reuse
+      // a healthy equal-or-newer daemon and take over a strictly-older one. The
+      // conn-refused catch sits on `ping` so it narrows the original infra-error
+      // union; the version check follows, and a freshly spawned daemon is our own
+      // version, so it is never seen as stale.
       const ensure = ping.pipe(
         Effect.catch((error) =>
           isConnRefused(error)
             ? spawnDaemon.pipe(Effect.flatMap(() => waitHealthy))
             : Effect.fail(error),
         ),
+        Effect.flatMap((health) =>
+          isStaleVersion(health.version, config.version)
+            ? takeover
+            : Effect.succeed(health),
+        ),
       );
 
-      // The poll path: a healthy daemon must already exist - `poll` never spawns
-      // one (ADR 0009), so a refused connection is a definitive `DaemonNotRunning`.
+      // The poll/end path: a healthy daemon must already exist - these never
+      // spawn one (ADR 0009), so a refused connection is a definitive
+      // `DaemonNotRunning`. The same version predicate runs, but a strictly-older
+      // daemon is a refuse-and-redirect `StaleDaemon` (re-run `intervu <file>` to
+      // take over) rather than an inline takeover on the long-poll hot path.
       const requireHealthy = ping.pipe(
         Effect.mapError((error) =>
           isConnRefused(error) ? new DaemonNotRunning() : error,
+        ),
+        Effect.flatMap((health) =>
+          isStaleVersion(health.version, config.version)
+            ? Effect.fail(new StaleDaemon())
+            : Effect.succeed(health),
         ),
       );
 
@@ -191,7 +346,14 @@ export class ServerLifecycle extends Context.Service<
           );
         });
 
-      return { ensure, requireHealthy, openSession, poll, end };
+      return {
+        ensure,
+        requireHealthy,
+        signalStop,
+        openSession,
+        poll,
+        end,
+      };
     }),
   );
 }

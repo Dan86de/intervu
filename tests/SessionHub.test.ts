@@ -102,3 +102,55 @@ describe("SessionHub presence", () => {
     }).pipe(Effect.provide(SessionHub.layer)),
   );
 });
+
+/**
+ * The global live-connection gauge (ADR 0016): every `subscribe` (an open poll
+ * or an open SSE stream) bumps it once, and the scope finalizer reverses it, so
+ * the daemon reads zero exactly when nothing is connected anywhere - across all
+ * keys, not per-key like `subscribers`. The `enterPoll`/`exitPoll` presence
+ * seam is independent and does not touch it.
+ */
+describe("SessionHub live-connection gauge", () => {
+  it.effect("a subscription bumps the gauge and the scope releases it", () =>
+    Effect.gen(function* () {
+      const hub = yield* SessionHub;
+      const key = SessionKey.make("conn-gauge");
+
+      expect(yield* hub.liveConnections).toBe(0);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* hub.subscribe(key);
+          expect(yield* hub.liveConnections).toBe(1);
+        }),
+      );
+      expect(yield* hub.liveConnections).toBe(0);
+    }).pipe(Effect.provide(SessionHub.layer)),
+  );
+
+  it.effect("the gauge sums subscriptions across keys", () =>
+    Effect.gen(function* () {
+      const hub = yield* SessionHub;
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* hub.subscribe(SessionKey.make("conn-a"));
+          yield* hub.subscribe(SessionKey.make("conn-b"));
+          expect(yield* hub.liveConnections).toBe(2);
+        }),
+      );
+      expect(yield* hub.liveConnections).toBe(0);
+    }).pipe(Effect.provide(SessionHub.layer)),
+  );
+
+  it.effect("the presence seam does not move the connection gauge", () =>
+    Effect.gen(function* () {
+      const hub = yield* SessionHub;
+      const key = SessionKey.make("conn-presence-neutral");
+
+      yield* hub.enterPoll(key);
+      expect(yield* hub.liveConnections).toBe(0);
+      yield* hub.exitPoll(key, true);
+      expect(yield* hub.liveConnections).toBe(0);
+    }).pipe(Effect.provide(SessionHub.layer)),
+  );
+});

@@ -8,6 +8,7 @@ import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import * as ErrorReport from "./ErrorReport.ts";
 import { ArtifactNotFound } from "./Errors.ts";
+import * as IdleShutdown from "./IdleShutdown.ts";
 import * as Output from "./Output.ts";
 import * as Server from "./Server.ts";
 import { ServerLifecycle } from "./ServerLifecycle.ts";
@@ -173,84 +174,86 @@ const end = Command.make("end", { file: Argument.file("file") }, ({ file }) =>
  * `intervu server`: the foreground daemon. Binds the loopback port, writes the
  * pidfile, serves the routes, and stops gracefully on SIGTERM - `runMain` turns
  * the signal into fiber interruption that runs the pidfile-cleanup finalizer.
+ *
+ * `--port <n>` binds *this* process to that port (flag > `INTERVU_PORT` >
+ * default); it is the foreground/debug form, so clients still resolve the port
+ * via env/default and must set `INTERVU_PORT=<n>` to reach a hand-run instance.
+ *
+ * Idle self-shutdown (ADR 0016): the served layer is raced against an
+ * `IdleShutdown` watcher over the shared `SessionHub` live-connection gauge. The
+ * watcher winning interrupts `Layer.launch`, which releases the server scope and
+ * runs the same pidfile-cleanup finalizer as a SIGTERM, so a respawned-but-
+ * unwatched or cleanly-ended daemon never dangles.
  */
-const server = Command.make("server", {}, () =>
-  Effect.gen(function* () {
-    const config = yield* AppConfig;
-    const fs = yield* FileSystem.FileSystem;
-
-    yield* fs.makeDirectory(config.stateDir, { recursive: true });
-    yield* fs.writeFileString(config.pidFile, `${process.pid}`);
-
-    const serverLayer = Server.layer.pipe(
-      Layer.provide(BrowserAssets.layer),
-      Layer.provide(
-        BunHttpServer.layer({
-          hostname: config.hostname,
-          port: config.port,
-        }),
+const server = Command.make(
+  "server",
+  {
+    port: Flag.optional(Flag.integer("port")).pipe(
+      Flag.withDescription(
+        "bind the daemon to this port (default: INTERVU_PORT, else 51789)",
       ),
-    );
+    ),
+  },
+  ({ port }) =>
+    Effect.gen(function* () {
+      const config = yield* AppConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const hub = yield* SessionHub;
+      const boundPort = Option.getOrElse(port, () => config.port);
 
-    yield* Effect.ensuring(
-      Layer.launch(serverLayer),
-      fs
-        .remove(config.pidFile, { force: true })
-        .pipe(
-          Effect.catch((error) =>
-            Effect.logError("failed to remove pidfile", error),
-          ),
+      yield* fs.makeDirectory(config.stateDir, { recursive: true });
+      yield* fs.writeFileString(config.pidFile, `${process.pid}`);
+
+      const serverLayer = Server.layer.pipe(
+        Layer.provide(BrowserAssets.layer),
+        Layer.provide(
+          BunHttpServer.layer({
+            hostname: config.hostname,
+            port: boundPort,
+          }),
         ),
-    );
-  }),
+      );
+
+      yield* Effect.ensuring(
+        Effect.race(
+          Layer.launch(serverLayer),
+          IdleShutdown.watch(hub.connectionChanges, config.idleTimeout),
+        ),
+        fs
+          .remove(config.pidFile, { force: true })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logError("failed to remove pidfile", error),
+            ),
+          ),
+      );
+    }),
 );
 
 /**
- * `intervu stop`: read the pidfile and SIGTERM the daemon, which releases the
- * server gracefully. Idempotent (ADR 0014): with no daemon to signal - the
+ * `intervu stop`: SIGTERM the daemon via the shared pidfile core
+ * (`ServerLifecycle.signalStop`, the same channel takeover uses), which releases
+ * the server gracefully. Idempotent (ADR 0014): with no daemon to signal - the
  * pidfile is absent, holds a non-numeric pid, or names a process that is already
  * gone - it is a benign no-op (`stopped: false`, exit 0), so a repeat stop never
  * fails. A genuine read error (e.g. an unreadable pidfile) still propagates.
  */
 const stop = Command.make("stop", {}, () =>
   Effect.gen(function* () {
-    const config = yield* AppConfig;
-    const fs = yield* FileSystem.FileSystem;
+    const lifecycle = yield* ServerLifecycle;
+    const signalled = yield* lifecycle.signalStop;
 
-    const nothingToStop = {
-      stopped: false,
-      help: "nothing to stop - no daemon is running",
-    } as const;
-
-    const exists = yield* fs.exists(config.pidFile);
-    if (!exists) {
-      yield* emit(yield* Toon.encode(nothingToStop));
-      return;
-    }
-
-    const pidText = yield* fs.readFileString(config.pidFile);
-    const pid = Number.parseInt(pidText.trim(), 10);
-    if (Number.isNaN(pid)) {
-      yield* emit(yield* Toon.encode(nothingToStop));
-      return;
-    }
-
-    // `process.kill` throws when the process is already gone; treat that as the
-    // benign no-op rather than an error - the daemon we would stop is not there.
-    const signalled = yield* Effect.try(() =>
-      process.kill(pid, "SIGTERM"),
-    ).pipe(Effect.orElseSucceed(() => false));
-
-    yield* emit(
-      yield* Toon.encode(
-        signalled
-          ? {
-              stopped: pid,
-              help: "daemon received SIGTERM - it will exit shortly",
-            }
-          : nothingToStop,
-      ),
-    );
+    const view = Option.match(signalled, {
+      onNone: () => ({
+        stopped: false,
+        help: "nothing to stop - no daemon is running",
+      }),
+      onSome: (pid) => ({
+        stopped: pid,
+        help: "daemon received SIGTERM - it will exit shortly",
+      }),
+    });
+    yield* emit(yield* Toon.encode(view));
   }),
 );
 
