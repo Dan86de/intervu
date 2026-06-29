@@ -74,3 +74,13 @@ export class BrowserAssetBuildError extends Schema.TaggedErrorClass<BrowserAsset
     reason: Schema.String,
   },
 ) {}
+
+/**
+ * `intervu setup` could not resolve the user's home directory, so it has no
+ * user-level location to install the Skill into. Distinct from a no-op: a clean
+ * install reports installed-now or already-present, this is a real failure.
+ */
+export class HomeDirectoryUnresolved extends Schema.TaggedErrorClass<HomeDirectoryUnresolved>()(
+  "HomeDirectoryUnresolved",
+  {},
+) {}

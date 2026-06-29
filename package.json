@@ -27,7 +27,8 @@
   "scripts": {
     "prepare": "effect-tsgo patch",
     "build:browser": "bun scripts/build-browser.ts",
-    "build": "bun run build:browser && bun scripts/build.ts",
+    "build:skill": "bun scripts/build-skill.ts",
+    "build": "bun run build:browser && bun run build:skill && bun scripts/build.ts",
     "format": "bunx --bun @biomejs/biome format --write",
     "lint": "bunx --bun @biomejs/biome lint --write",
     "check": "bunx --bun @biomejs/biome check --write",

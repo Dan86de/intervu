@@ -4,6 +4,7 @@ import {
   ArtifactNotFound,
   BrowserAssetBuildError,
   DaemonNotRunning,
+  HomeDirectoryUnresolved,
   ReviewNotOpen,
   ServerStartTimeout,
   StaleDaemon,
@@ -107,6 +108,16 @@ export const report = (
         tag: error._tag,
         message: `browser asset build failed: ${error.reason}`,
         help: `check the daemon log at ${ctx.logFile}`,
+      }),
+    );
+  }
+
+  if (error instanceof HomeDirectoryUnresolved) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: "could not resolve a home directory to install into",
+        help: "set HOME to your home directory, then re-run 'intervu setup'",
       }),
     );
   }

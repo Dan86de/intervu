@@ -37,6 +37,7 @@ export class AppConfig extends Context.Service<
     readonly stateFile: string;
     readonly pidFile: string;
     readonly logFile: string;
+    readonly homeDir: Option.Option<string>;
   }
 >()("@intervu/AppConfig") {
   static readonly layer = Layer.effect(
@@ -52,9 +53,13 @@ export class AppConfig extends Context.Service<
       ).pipe(Config.orElse(() => Config.succeed(defaultIdleSeconds)));
       const override = yield* Config.option(Config.string("INTERVU_STATE_DIR"));
       const xdg = yield* Config.option(Config.string("XDG_STATE_HOME"));
-      const home = yield* Config.string("HOME").pipe(
-        Config.orElse(() => Config.succeed("")),
+      // An unset or empty `HOME` is unresolved: it falls back to "" for the
+      // state-dir derivation but stays `None` for `homeDir`, so `setup` can fail
+      // `HomeDirectoryUnresolved` rather than installing under a bare root.
+      const homeDir = (yield* Config.option(Config.string("HOME"))).pipe(
+        Option.filter((value) => value.length > 0),
       );
+      const home = Option.getOrElse(homeDir, () => "");
 
       const stateDir = Option.match(override, {
         onSome: (dir) => dir,
@@ -74,6 +79,7 @@ export class AppConfig extends Context.Service<
         stateFile: path.join(stateDir, "state.json"),
         pidFile: path.join(stateDir, "server.pid"),
         logFile: path.join(stateDir, "server.log"),
+        homeDir,
       };
     }),
   );

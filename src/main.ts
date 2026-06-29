@@ -15,6 +15,8 @@ import { ServerLifecycle } from "./ServerLifecycle.ts";
 import { SessionHub } from "./SessionHub.ts";
 import { SessionPersistence } from "./SessionPersistence.ts";
 import { SessionStore } from "./SessionStore.ts";
+import { Setup } from "./Setup.ts";
+import { SkillAsset } from "./SkillAsset.ts";
 import * as Toon from "./Toon.ts";
 
 const bin = "intervu";
@@ -257,14 +259,46 @@ const stop = Command.make("stop", {}, () =>
   }),
 );
 
-const cli = root.pipe(Command.withSubcommands([open, poll, end, server, stop]));
+/**
+ * `intervu setup`: install intervu's agent Skill at the user-level location
+ * Claude Code discovers skills in (issue #12). Thin glue over `Setup.install` -
+ * it writes the Skill (or finds it already present) and renders the result as
+ * TOON through the single `emit` boundary with a next-step help line. The Skill
+ * is carried baked inside the binary (ADR 0007), so this needs no source tree.
+ */
+const setup = Command.make("setup", {}, () =>
+  Effect.gen(function* () {
+    const installer = yield* Setup;
+    const result = yield* installer.install;
+
+    const view = Output.setup({
+      skill: { action: result.skill.action, path: result.skill.path },
+      help:
+        result.skill.action === "installed"
+          ? "skill installed - start a fresh agent session so it discovers intervu, then 'intervu <file>' to open a review"
+          : "skill already installed - re-running setup changes nothing",
+    });
+    yield* emit(yield* Toon.encode(view));
+  }),
+);
+
+const cli = root.pipe(
+  Command.withSubcommands([open, poll, end, server, stop, setup]),
+);
 
 /**
  * Bare `intervu <file>` aliases `intervu open <file>`. The CLI framework can't
  * mix a root positional argument with subcommands, so an unrecognized leading
  * token that isn't a flag is rewritten to `open <file>` before parsing.
  */
-const knownSubcommands = new Set(["open", "poll", "end", "server", "stop"]);
+const knownSubcommands = new Set([
+  "open",
+  "poll",
+  "end",
+  "server",
+  "stop",
+  "setup",
+]);
 const rawArgs = process.argv.slice(2);
 const firstArg = rawArgs[0];
 const args =
@@ -283,9 +317,11 @@ const AppLayer = Layer.mergeAll(
   SessionStore.layer,
   ServerLifecycle.layer,
   ArtifactWatcher.layer,
+  Setup.layer,
 ).pipe(
   Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),
+  Layer.provideMerge(SkillAsset.layer),
   Layer.provideMerge(AppConfig.layer),
   Layer.provideMerge(PlatformLayer),
 );

@@ -186,6 +186,36 @@ export const ended = (params: { readonly help: string }): EndedView => ({
 });
 
 /**
+ * The Skill half of `intervu setup`: what happened to the Skill (`installed` or
+ * `already-present`) and where it landed, in canonical key order.
+ */
+export interface SetupSkillView {
+  readonly action: string;
+  readonly path: string;
+}
+
+/**
+ * The `setup` view, in canonical key order: `skill`, then `help`. Gains a `hook`
+ * field alongside `skill` when the hook half lands.
+ */
+export interface SetupView {
+  readonly skill: SetupSkillView;
+  readonly help: string;
+}
+
+/**
+ * Shape the `setup` result, pinning key order so the TOON render is stable
+ * regardless of how the caller ordered its fields.
+ */
+export const setup = (params: {
+  readonly skill: { readonly action: string; readonly path: string };
+  readonly help: string;
+}): SetupView => ({
+  skill: { action: params.skill.action, path: params.skill.path },
+  help: params.help,
+});
+
+/**
  * A structured error view. Errors are success-only here - the failure path is
  * wired in the AXI-polish slice (#9) - but the shape is the seam they land on.
  */

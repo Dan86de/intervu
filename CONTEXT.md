@@ -96,6 +96,16 @@ _Avoid_: socket, request, connection-to-a-Session; a **Session** persists with z
 The daemon reclaiming itself: one watcher fiber races a grace sleep (default 30s, `INTERVU_IDLE_TIMEOUT`) against the **live-connection** count and shuts the daemon down once that count has stayed zero for the whole grace window, so a respawned-but-unwatched or cleanly-ended daemon never dangles. A single unified condition (`connections == 0`): a terminal **End** with no tab open reclaims through the same timer, not a separate immediate path, and the grace window covers the spawn->first-connect gap so startup is safe.
 _Avoid_: timeout, auto-stop, reap; **stop** (deliberate) and **Takeover** (replacement by a newer client).
 
+### Discovery
+
+**Skill**:
+intervu's agent-facing description of the review loop - a markdown document authored in intervu's own vocabulary that **Setup** installs where Claude Code discovers skills (the user-level `~/.claude/skills/intervu/SKILL.md`), so an agent knows the loop (open or resume a **Session**, **poll** for **Feedback**, read the **annotations** and **DOM snapshot**, edit the **artifact**, reply with an **agent-reply**, **End**) without the human reciting it. Carried baked inside the single binary (ADR 0007), so Setup writes it out with no source tree present.
+_Avoid_: prompt (collides with the LLM sense), guide, instructions, docs
+
+**Setup**:
+The one-command wiring (`intervu setup`) that makes intervu discoverable to the agent. This slice (#12) installs the **Skill** at the user-level location and reports, as content-first TOON, whether it was installed-now or already-present and where. Idempotent: re-running is a clean no-op (an already-present Skill is not rewritten). The session-start hook half is added later under the same `install` interface.
+_Avoid_: install, configure, init (the command is `setup`); **Takeover** (a daemon-lifecycle move, unrelated)
+
 ## Relationships
 
 - A **Session** wraps one **artifact**, shown inside the **chrome**.
@@ -109,6 +119,7 @@ _Avoid_: timeout, auto-stop, reap; **stop** (deliberate) and **Takeover** (repla
 - The loop's three transports are distinct paths: the **Bridge** carries iframe<->chrome, the **poll** carries server->agent (feedback out), and the **SSE stream** carries server->browser (reload, **Conversation** appends, **Presence**).
 - The **daemon** starts on demand and reclaims itself three ways: **Takeover** evicts a stale older daemon (a newer client replacing it), **Idle shutdown** retires an unwatched one (zero **live connections** for the grace window), and **stop** ends it deliberately (human or agent).
 - A **live connection** is an open **poll** or **SSE stream**; **Presence** and **Idle shutdown** both read the daemon's connection accounting but answer different questions - agent activity for one Session vs. is-anyone-here across the whole daemon.
+- **Setup** installs the **Skill** so the agent reaches for intervu on its own; this extends intervu's **AXI** conformance from runtime ergonomics to discoverability - the Skill is the agent-facing description of the loop.
 
 ## Example dialogue
 
