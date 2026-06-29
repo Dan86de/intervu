@@ -9,22 +9,23 @@ See [`CONTEXT.md`](CONTEXT.md) for the ubiquitous language and
 
 ## Install
 
-intervu ships as a single self-contained [Bun](https://bun.sh) binary, so it
-needs Bun on your `PATH`. Run it without installing anything:
+The review loop runs by having your agent shell out to a bare `intervu` command, so `intervu` has to be on your `PATH`.
+intervu ships as a single self-contained [Bun](https://bun.sh) binary, so you need Bun on your `PATH` too.
+Install it globally and wire it into your agent:
+
+```bash
+bun add -g intervu
+intervu setup
+```
+
+`intervu setup` installs the agent skill and the session-start hook that make the review loop discoverable.
+It refuses when `intervu` is not yet on your `PATH`, because the skill and hook it writes both invoke a bare `intervu` - a transient `bunx` run would leave them pointing at a command that does not exist.
+
+For a one-off manual look at an artifact you can run it without installing, but this is not enough for the agent loop:
 
 ```bash
 bunx intervu report.html
 ```
-
-Or install it globally so `intervu` is always on hand:
-
-```bash
-bun add -g intervu
-intervu report.html
-```
-
-Then run `intervu setup` once to make the review loop discoverable to your agent
-(installs the agent skill and the session-start hook).
 
 ## Local development
 

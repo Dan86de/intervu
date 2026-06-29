@@ -6,6 +6,7 @@ import {
   ArtifactNotFound,
   ConflictingSetupScope,
   DaemonNotRunning,
+  IntervuNotOnPath,
   ReviewNotOpen,
   ServerStartTimeout,
 } from "../src/Errors.ts";
@@ -65,6 +66,18 @@ describe("ErrorReport.report", () => {
     expect(value.error.message).toContain("--skill-only");
     expect(value.error.message).toContain("--hooks-only");
     expect(value.help).toContain("intervu setup");
+  });
+
+  it("sends a not-on-PATH setup failure to the global install", () => {
+    const view = ErrorReport.report(
+      new IntervuNotOnPath({ command: "intervu" }),
+      ctx,
+    );
+
+    const value = Option.getOrThrow(view);
+    expect(value.error.tag).toBe("IntervuNotOnPath");
+    expect(value.error.message).toContain("PATH");
+    expect(value.help).toContain("bun add -g intervu");
   });
 
   it("renders a generic envelope for infra errors, pointing at the log", () => {

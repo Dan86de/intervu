@@ -6,6 +6,7 @@ import { AppConfig, version } from "./AppConfig.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
+import { CommandResolver } from "./CommandResolver.ts";
 import * as ErrorReport from "./ErrorReport.ts";
 import { ArtifactNotFound, ConflictingSetupScope } from "./Errors.ts";
 import * as IdleShutdown from "./IdleShutdown.ts";
@@ -357,6 +358,7 @@ const AppLayer = Layer.mergeAll(
   Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),
   Layer.provideMerge(SkillAsset.layer),
+  Layer.provideMerge(CommandResolver.layer),
   Layer.provideMerge(AppConfig.layer),
   Layer.provideMerge(PlatformLayer),
 );

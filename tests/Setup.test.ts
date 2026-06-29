@@ -10,6 +10,7 @@ import {
   Ref,
 } from "effect";
 import { AppConfig } from "../src/AppConfig.ts";
+import { CommandResolver } from "../src/CommandResolver.ts";
 import { Setup } from "../src/Setup.ts";
 import { SkillAsset } from "../src/SkillAsset.ts";
 
@@ -81,14 +82,28 @@ const testConfig = (homeDir: Option.Option<string>) =>
     currentDir: PROJECT,
   });
 
+/**
+ * Stub `CommandResolver`: `resolve` answers with a fixed `Option`, standing in
+ * for the real `Bun.which` PATH lookup. Defaults to a resolved `intervu` so
+ * setup's precondition passes; pass `Option.none()` to exercise the refusal.
+ */
+const resolverLayer = (
+  resolved: Option.Option<string> = Option.some("/usr/local/bin/intervu"),
+) =>
+  Layer.succeed(CommandResolver, {
+    resolve: () => Effect.succeed(resolved),
+  });
+
 const setupLayer = (
   seed: Record<string, string> = {},
   home: Option.Option<string> = Option.some(HOME),
+  resolved: Option.Option<string> = Option.some("/usr/local/bin/intervu"),
 ) =>
   Setup.layer.pipe(
     Layer.provideMerge(memoryFsLayer(seed)),
     Layer.provide(Path.layer),
     Layer.provide(Layer.succeed(SkillAsset, { markdown: SKILL })),
+    Layer.provide(resolverLayer(resolved)),
     Layer.provide(testConfig(home)),
   );
 
@@ -211,6 +226,38 @@ describe("Setup.install", () => {
       const written = yield* fs.readFileString(skill.path);
       expect(written).toBe(SKILL);
     }).pipe(Effect.provide(setupLayer({ [skillFilePath]: "stale guidance" }))),
+  );
+
+  it.effect(
+    "refuses with IntervuNotOnPath when intervu is not on PATH, writing nothing",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* Setup;
+        const error = yield* Effect.flip(
+          setup.install({ project: false, scope: "both" }),
+        );
+        expect(error._tag).toBe("IntervuNotOnPath");
+
+        // The precondition fails before any write, so neither half lands.
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(skillFilePath)).toBe(false);
+        expect(yield* fs.exists(settingsFilePath)).toBe(false);
+      }).pipe(Effect.provide(setupLayer({}, Option.some(HOME), Option.none()))),
+  );
+
+  it.effect("the PATH precondition guards skill-only and hook-only too", () =>
+    Effect.gen(function* () {
+      const setup = yield* Setup;
+      const skillOnly = yield* Effect.flip(
+        setup.install({ project: false, scope: "skill-only" }),
+      );
+      expect(skillOnly._tag).toBe("IntervuNotOnPath");
+
+      const hookOnly = yield* Effect.flip(
+        setup.install({ project: false, scope: "hook-only" }),
+      );
+      expect(hookOnly._tag).toBe("IntervuNotOnPath");
+    }).pipe(Effect.provide(setupLayer({}, Option.some(HOME), Option.none()))),
   );
 
   it.effect("fails HomeDirectoryUnresolved when home is unresolved", () =>

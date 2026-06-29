@@ -76,6 +76,21 @@ export class BrowserAssetBuildError extends Schema.TaggedErrorClass<BrowserAsset
 ) {}
 
 /**
+ * `intervu setup` could not resolve an `intervu` binary on the user's `PATH`, so
+ * the Skill and Hook it would write - both of which shell out to a bare
+ * `intervu` - could not run (ADR 0019). Refused before any write rather than
+ * leaving artifacts that fail the moment the agent or the session-start hook
+ * invokes them; a transient `bunx intervu` does not put `intervu` on `PATH`, so
+ * a global install (`bun add -g intervu`) is required first.
+ */
+export class IntervuNotOnPath extends Schema.TaggedErrorClass<IntervuNotOnPath>()(
+  "IntervuNotOnPath",
+  {
+    command: Schema.String,
+  },
+) {}
+
+/**
  * `intervu setup` could not resolve the user's home directory, so it has no
  * user-level location to install the Skill into. Distinct from a no-op: a clean
  * install reports installed-now or already-present, this is a real failure.

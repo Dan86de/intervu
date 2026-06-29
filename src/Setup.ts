@@ -3,8 +3,10 @@ import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
 import * as Context from "effect/Context";
 import { AppConfig } from "./AppConfig.ts";
 import * as ClaudeSettings from "./ClaudeSettings.ts";
+import { CommandResolver } from "./CommandResolver.ts";
 import {
   HomeDirectoryUnresolved,
+  IntervuNotOnPath,
   SettingsFileUnparseable,
   SettingsFileUnreadable,
 } from "./Errors.ts";
@@ -67,6 +69,7 @@ export class Setup extends Context.Service<
       options: InstallOptions,
     ) => Effect.Effect<
       SetupResult,
+      | IntervuNotOnPath
       | HomeDirectoryUnresolved
       | SettingsFileUnreadable
       | SettingsFileUnparseable
@@ -81,6 +84,7 @@ export class Setup extends Context.Service<
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const asset = yield* SkillAsset;
+      const resolver = yield* CommandResolver;
 
       /**
        * Resolve `<claudeDir>/skills/intervu/SKILL.md`, then write the Skill
@@ -178,6 +182,23 @@ export class Setup extends Context.Service<
        */
       const install = (options: InstallOptions) =>
         Effect.gen(function* () {
+          // Both halves shell out to a bare `intervu` (the Skill tells the agent
+          // to run `intervu <file>`; the Hook's command is `intervu`), so wiring
+          // them is only meaningful when an `intervu` binary resolves on `PATH`.
+          // Refuse up front - before any write - rather than leaving a Skill and
+          // Hook that fail the moment they are invoked (ADR 0019). A transient
+          // `bunx intervu` never puts `intervu` on `PATH`; a global install does.
+          const resolved = yield* resolver.resolve(
+            ClaudeSettings.intervuHookCommand,
+          );
+          if (Option.isNone(resolved)) {
+            return yield* Effect.fail(
+              new IntervuNotOnPath({
+                command: ClaudeSettings.intervuHookCommand,
+              }),
+            );
+          }
+
           const claudeDir = options.project
             ? path.join(config.currentDir, ".claude")
             : yield* Option.match(config.homeDir, {

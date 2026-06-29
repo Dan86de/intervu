@@ -6,6 +6,7 @@ import {
   ConflictingSetupScope,
   DaemonNotRunning,
   HomeDirectoryUnresolved,
+  IntervuNotOnPath,
   ReviewNotOpen,
   ServerStartTimeout,
   SettingsFileUnparseable,
@@ -111,6 +112,16 @@ export const report = (
         tag: error._tag,
         message: `browser asset build failed: ${error.reason}`,
         help: `check the daemon log at ${ctx.logFile}`,
+      }),
+    );
+  }
+
+  if (error instanceof IntervuNotOnPath) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: `'${error.command}' is not on your PATH, so the skill and session-start hook that setup writes could not run`,
+        help: "install it globally first - run 'bun add -g intervu', then re-run 'intervu setup'",
       }),
     );
   }
