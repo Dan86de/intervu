@@ -84,3 +84,26 @@ export class HomeDirectoryUnresolved extends Schema.TaggedErrorClass<HomeDirecto
   "HomeDirectoryUnresolved",
   {},
 ) {}
+
+/**
+ * `intervu setup` found the harness settings file but could not read it (e.g. a
+ * permissions error). Surfaced rather than silently skipping the Hook half.
+ */
+export class SettingsFileUnreadable extends Schema.TaggedErrorClass<SettingsFileUnreadable>()(
+  "SettingsFileUnreadable",
+  {
+    path: Schema.String,
+  },
+) {}
+
+/**
+ * `intervu setup` read the harness settings file but it is not valid JSON (or
+ * not the shape intervu expects). It is refused, never clobbered: a malformed
+ * file is a clear structured error, so the user's config is left intact.
+ */
+export class SettingsFileUnparseable extends Schema.TaggedErrorClass<SettingsFileUnparseable>()(
+  "SettingsFileUnparseable",
+  {
+    path: Schema.String,
+  },
+) {}

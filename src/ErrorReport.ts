@@ -7,6 +7,8 @@ import {
   HomeDirectoryUnresolved,
   ReviewNotOpen,
   ServerStartTimeout,
+  SettingsFileUnparseable,
+  SettingsFileUnreadable,
   StaleDaemon,
   StaleServerTakeover,
 } from "./Errors.ts";
@@ -118,6 +120,26 @@ export const report = (
         tag: error._tag,
         message: "could not resolve a home directory to install into",
         help: "set HOME to your home directory, then re-run 'intervu setup'",
+      }),
+    );
+  }
+
+  if (error instanceof SettingsFileUnreadable) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: `could not read the settings file at ${error.path}`,
+        help: "check its permissions, then re-run 'intervu setup'",
+      }),
+    );
+  }
+
+  if (error instanceof SettingsFileUnparseable) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: `the settings file at ${error.path} is not valid JSON`,
+        help: "fix or remove the file, then re-run 'intervu setup'",
       }),
     );
   }

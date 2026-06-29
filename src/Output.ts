@@ -186,20 +186,22 @@ export const ended = (params: { readonly help: string }): EndedView => ({
 });
 
 /**
- * The Skill half of `intervu setup`: what happened to the Skill (`installed` or
- * `already-present`) and where it landed, in canonical key order.
+ * One artifact of `intervu setup`: what happened to it (`installed` or
+ * `already-present`) and where it landed, in canonical key order. Used for both
+ * the Skill and the Hook.
  */
-export interface SetupSkillView {
+export interface SetupArtifactView {
   readonly action: string;
   readonly path: string;
 }
 
 /**
- * The `setup` view, in canonical key order: `skill`, then `help`. Gains a `hook`
- * field alongside `skill` when the hook half lands.
+ * The `setup` view, in canonical key order: `skill`, `hook`, then `help`. One
+ * entry per artifact `setup` wires.
  */
 export interface SetupView {
-  readonly skill: SetupSkillView;
+  readonly skill: SetupArtifactView;
+  readonly hook: SetupArtifactView;
   readonly help: string;
 }
 
@@ -209,9 +211,11 @@ export interface SetupView {
  */
 export const setup = (params: {
   readonly skill: { readonly action: string; readonly path: string };
+  readonly hook: { readonly action: string; readonly path: string };
   readonly help: string;
 }): SetupView => ({
   skill: { action: params.skill.action, path: params.skill.path },
+  hook: { action: params.hook.action, path: params.hook.path },
   help: params.help,
 });
 

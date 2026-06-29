@@ -22,6 +22,7 @@ import { SkillAsset } from "../src/SkillAsset.ts";
 
 const HOME = "/home/test";
 const skillFilePath = `${HOME}/.claude/skills/intervu/SKILL.md`;
+const settingsFilePath = `${HOME}/.claude/settings.json`;
 const SKILL = "# intervu\nopen / poll / --agent-reply / end\n";
 
 const memoryFsLayer = (seed: Record<string, string> = {}) =>
@@ -48,6 +49,16 @@ const memoryFsLayer = (seed: Record<string, string> = {}) =>
           }),
         writeFileString: (path, data) =>
           Ref.update(ref, (files) => new Map(files).set(path, data)),
+        rename: (from, to) =>
+          Ref.update(ref, (files) => {
+            const next = new Map(files);
+            const value = next.get(from);
+            if (value !== undefined) {
+              next.set(to, value);
+              next.delete(from);
+            }
+            return next;
+          }),
         makeDirectory: () => Effect.void,
       });
     }),
@@ -92,18 +103,77 @@ describe("Setup.install", () => {
     }).pipe(Effect.provide(setupLayer())),
   );
 
+  it.effect("a fresh install merges the Hook and reports installed", () =>
+    Effect.gen(function* () {
+      const setup = yield* Setup;
+      const result = yield* setup.install;
+
+      expect(result.hook.action).toBe("installed");
+      expect(result.hook.path).toBe(settingsFilePath);
+
+      const fs = yield* FileSystem.FileSystem;
+      const written = yield* fs.readFileString(result.hook.path);
+      const parsed = JSON.parse(written);
+      const commands = parsed.hooks.SessionStart.flatMap(
+        (group: { hooks: { command: string }[] }) =>
+          group.hooks.map((entry) => entry.command),
+      );
+      expect(commands).toContain("intervu");
+    }).pipe(Effect.provide(setupLayer())),
+  );
+
+  it.effect("re-running install is idempotent for both Skill and Hook", () =>
+    Effect.gen(function* () {
+      const setup = yield* Setup;
+      const first = yield* setup.install;
+      expect(first.skill.action).toBe("installed");
+      expect(first.hook.action).toBe("installed");
+
+      const second = yield* setup.install;
+      expect(second.skill.action).toBe("already-present");
+      expect(second.skill.path).toBe(skillFilePath);
+      expect(second.hook.action).toBe("already-present");
+      expect(second.hook.path).toBe(settingsFilePath);
+    }).pipe(Effect.provide(setupLayer())),
+  );
+
+  it.effect("merges the Hook into an existing settings file in place", () =>
+    Effect.gen(function* () {
+      const setup = yield* Setup;
+      const result = yield* setup.install;
+
+      expect(result.hook.action).toBe("installed");
+
+      const fs = yield* FileSystem.FileSystem;
+      const written = yield* fs.readFileString(result.hook.path);
+      const parsed = JSON.parse(written);
+      // Unrelated settings survive verbatim.
+      expect(parsed.model).toBe("opus");
+      const commands = parsed.hooks.SessionStart.flatMap(
+        (group: { hooks: { command: string }[] }) =>
+          group.hooks.map((entry) => entry.command),
+      );
+      expect(commands).toContain("intervu");
+    }).pipe(
+      Effect.provide(setupLayer({ [settingsFilePath]: '{ "model": "opus" }' })),
+    ),
+  );
+
   it.effect(
-    "re-running install is idempotent and reports already-present",
+    "refuses an unparseable settings file rather than clobbering it",
     () =>
       Effect.gen(function* () {
         const setup = yield* Setup;
-        const first = yield* setup.install;
-        expect(first.skill.action).toBe("installed");
+        const error = yield* Effect.flip(setup.install);
+        expect(error._tag).toBe("SettingsFileUnparseable");
 
-        const second = yield* setup.install;
-        expect(second.skill.action).toBe("already-present");
-        expect(second.skill.path).toBe(skillFilePath);
-      }).pipe(Effect.provide(setupLayer())),
+        // The malformed file is left untouched.
+        const fs = yield* FileSystem.FileSystem;
+        const after = yield* fs.readFileString(settingsFilePath);
+        expect(after).toBe("{ not valid json");
+      }).pipe(
+        Effect.provide(setupLayer({ [settingsFilePath]: "{ not valid json" })),
+      ),
   );
 
   it.effect("a drifted Skill file is rewritten and reported installed", () =>

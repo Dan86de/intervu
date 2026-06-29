@@ -260,23 +260,28 @@ const stop = Command.make("stop", {}, () =>
 );
 
 /**
- * `intervu setup`: install intervu's agent Skill at the user-level location
- * Claude Code discovers skills in (issue #12). Thin glue over `Setup.install` -
- * it writes the Skill (or finds it already present) and renders the result as
- * TOON through the single `emit` boundary with a next-step help line. The Skill
- * is carried baked inside the binary (ADR 0007), so this needs no source tree.
+ * `intervu setup`: wire intervu into Claude Code at the user level (issue #13).
+ * Thin glue over `Setup.install`, which installs both the agent Skill (the
+ * user-level location Claude Code discovers skills in) and a `SessionStart` Hook
+ * (merged into the harness settings file so bare `intervu`'s Home view is
+ * injected as session-start context, ADR 0013). Each half reports installed-now
+ * versus already-present with its resolved location; the result renders as TOON
+ * through the single `emit` boundary with a next-step help line. The Skill is
+ * carried baked inside the binary (ADR 0007), so this needs no source tree.
  */
 const setup = Command.make("setup", {}, () =>
   Effect.gen(function* () {
     const installer = yield* Setup;
     const result = yield* installer.install;
 
+    const changed =
+      result.skill.action === "installed" || result.hook.action === "installed";
     const view = Output.setup({
       skill: { action: result.skill.action, path: result.skill.path },
-      help:
-        result.skill.action === "installed"
-          ? "skill installed - start a fresh agent session so it discovers intervu, then 'intervu <file>' to open a review"
-          : "skill already installed - re-running setup changes nothing",
+      hook: { action: result.hook.action, path: result.hook.path },
+      help: changed
+        ? "intervu wired up - start a fresh agent session so it discovers the skill and home view, then 'intervu <file>' to open a review"
+        : "intervu already wired up - re-running setup changes nothing",
     });
     yield* emit(yield* Toon.encode(view));
   }),
