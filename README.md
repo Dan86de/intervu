@@ -7,6 +7,25 @@ page, and the agent long-polls for that feedback and live-edits the file.
 See [`CONTEXT.md`](CONTEXT.md) for the ubiquitous language and
 [`docs/adr/`](docs/adr/) for the architectural decisions.
 
+## Install
+
+intervu ships as a single self-contained [Bun](https://bun.sh) binary, so it
+needs Bun on your `PATH`. Run it without installing anything:
+
+```bash
+bunx intervu report.html
+```
+
+Or install it globally so `intervu` is always on hand:
+
+```bash
+bun add -g intervu
+intervu report.html
+```
+
+Then run `intervu setup` once to make the review loop discoverable to your agent
+(installs the agent skill and the session-start hook).
+
 ## Local development
 
 Install dependencies:

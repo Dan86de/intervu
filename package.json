@@ -1,31 +1,42 @@
 {
   "name": "intervu",
-  "module": "src/main.ts",
+  "version": "0.0.0",
+  "description": "AXI-style CLI that turns an agent-generated HTML artifact into a collaborative browser review surface.",
+  "keywords": [
+    "cli",
+    "axi",
+    "agent",
+    "agent-ergonomic",
+    "review",
+    "annotation",
+    "html",
+    "artifact",
+    "effect",
+    "llm"
+  ],
+  "license": "MIT",
+  "author": "Daniel Noworyta <daniel.noworyta@gmail.com>",
+  "homepage": "https://github.com/Dan86de/intervu#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dan86de/intervu.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Dan86de/intervu/issues"
+  },
   "type": "module",
-  "private": true,
-  "devDependencies": {
-    "@biomejs/biome": "2.5.1",
-    "@effect/tsgo": "^0.14.6",
-    "@effect/vitest": "4.0.0-beta.91",
-    "@playwright/test": "^1.61.1",
-    "@tailwindcss/cli": "^4",
-    "@types/bun": "latest",
-    "@typescript/native-preview": "^7.0.0-dev.20260628.1",
-    "happy-dom": "^20.10.6",
-    "tailwindcss": "^4",
-    "vitest": "^4.1.9"
+  "bin": {
+    "intervu": "dist/intervu"
   },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "@effect/platform-bun": "4.0.0-beta.91",
-    "@medv/finder": "^4.0.2",
-    "@toon-format/toon": "^2.3.0",
-    "effect": "4.0.0-beta.91"
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "bun": ">=1.1.0"
   },
   "scripts": {
     "prepare": "effect-tsgo patch",
+    "prepack": "bun run build",
     "build:browser": "bun scripts/build-browser.ts",
     "build:skill": "bun scripts/build-skill.ts",
     "build": "bun run build:browser && bun run build:skill && bun scripts/build.ts",
@@ -38,5 +49,22 @@
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.1",
+    "@effect/platform-bun": "4.0.0-beta.91",
+    "@effect/tsgo": "^0.14.6",
+    "@effect/vitest": "4.0.0-beta.91",
+    "@medv/finder": "^4.0.2",
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/cli": "^4",
+    "@toon-format/toon": "^2.3.0",
+    "@types/bun": "latest",
+    "@typescript/native-preview": "^7.0.0-dev.20260628.1",
+    "effect": "4.0.0-beta.91",
+    "happy-dom": "^20.10.6",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.9"
   }
 }
